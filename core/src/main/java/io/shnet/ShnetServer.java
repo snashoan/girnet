@@ -418,7 +418,7 @@ public final class ShnetServer implements AutoCloseable {
                 .append("<style>body{font-family:sans-serif;max-width:600px;margin:40px auto;padding:0 20px;}")
                 .append("ul{list-style:none;padding:0;}li{margin:12px 0;padding:12px;background:#f5f5f5;border-radius:6px;}")
                 .append("a{color:#0969da;font-weight:bold;text-decoration:none;word-break:break-all;}</style>")
-                .append("</head><body><h2>⚡ shnet node links</h2><ul>");
+                .append("</head><body><h2>shnet node links</h2><ul>");
         for (Shnet.Link link : links) {
             html.append("<li><strong>").append(link.label).append("</strong><br><a href=\"")
                     .append(link.url).append("\">").append(link.url).append("</a></li>");
@@ -437,7 +437,7 @@ public final class ShnetServer implements AutoCloseable {
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
                 + "<title>shnet QR</title>"
                 + "<style>body{font-family:sans-serif;text-align:center;padding:40px 20px;}img{border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}</style>"
-                + "</head><body><h2>⚡ Scan to connect</h2>"
+                + "</head><body><h2>Scan to connect</h2>"
                 + "<img src=\"data:image/png;base64," + b64 + "\" width=\"320\" height=\"320\"><p><a href=\"" + targetUrl + "\">" + targetUrl + "</a></p></body></html>";
         return Shnet.Response.html(html);
     }

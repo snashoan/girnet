@@ -63,7 +63,7 @@ public final class IdentityManager {
         // 3. If running interactively in terminal (TTY), ask the user
         if (System.console() != null) {
             try {
-                System.out.print("\u001B[38;5;220m✨ Welcome to girchat! Enter your nickname [default: " + DEFAULT_NAME + "]: \u001B[0m");
+                System.out.print("nickname [" + DEFAULT_NAME + "]: ");
                 System.out.flush();
                 BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
                 String input = reader.readLine();

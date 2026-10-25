@@ -151,12 +151,12 @@ public final class StaticFileHandler implements Shnet.Handler {
                 .append("a:hover { text-decoration: underline; }")
                 .append(".size, .date { color: #666; font-size: 0.85rem; white-space: nowrap; }")
                 .append("</style></head><body>")
-                .append("<div class=\"brand\">⚡ shnet node</div>")
+                .append("<div class=\"brand\">shnet node</div>")
                 .append("<h1>Index of ").append(escapeHtml(webPath)).append("</h1>")
                 .append("<table><thead><tr><th>Name</th><th>Size</th><th>Last Modified</th></tr></thead><tbody>");
 
         if (!"/".equals(webPath)) {
-            html.append("<tr><td>📁 <a href=\"../\">..</a></td><td>-</td><td>-</td></tr>");
+            html.append("<tr><td><a href=\"../\">../</a></td><td>-</td><td>-</td></tr>");
         }
 
         for (File f : files) {
@@ -164,7 +164,7 @@ public final class StaticFileHandler implements Shnet.Handler {
             if (name.startsWith(".")) {
                 continue;
             }
-            String icon = f.isDirectory() ? "📁 " : "📄 ";
+            String icon = f.isDirectory() ? "[dir] " : "";
             String href = f.isDirectory() ? name + "/" : name;
             String sizeStr = f.isDirectory() ? "-" : formatSize(f.length());
             String dateStr = dateFormat.format(new Date(f.lastModified()));

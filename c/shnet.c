@@ -47,10 +47,14 @@ static char g_local_name[64] = "rei";
 static char g_active_peer[256] = "";
 static char g_peer_name[128] = "";
 static bool g_is_host = true;
-static char g_static_dir[4096] = "";
+static char g_static_dir[2048] = "";
 static int g_local_port = DEFAULT_PORT;
 static volatile bool g_running = true;
 static pthread_mutex_t g_storage_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static inline void safe_write(int fd, const void *buf, size_t count) {
+    if (write(fd, buf, count) < 0) { /* ignored */ }
+}
 
 /* ------------------------------------------------------------------------- */
 /* Identity & Storage Helpers                                                */
@@ -104,7 +108,7 @@ static void resolve_nickname(const char *cli_name, char *out_name, size_t max_le
     }
 
     if (isatty(STDIN_FILENO)) {
-        printf("\033[38;5;220m✨ Welcome to girchat! Enter your nickname [default: rei]: \033[0m");
+        printf("nickname [rei]: ");
         fflush(stdout);
         char buf[128];
         if (fgets(buf, sizeof(buf), stdin)) {
@@ -214,7 +218,11 @@ static void print_history(const char *filter_peer, int limit) {
 
     char line[8192];
     int count = 0;
-    printf("%s─── Stored Chat History ──────────────────────────────%s\n", CLR_GRAY, ANSI_RESET);
+    if (filter_peer && filter_peer[0]) {
+        printf("[HISTORY] %s\n", filter_peer);
+    } else {
+        printf("[HISTORY] all\n");
+    }
     while (fgets(line, sizeof(line), f)) {
         char sender[128] = "", peer[256] = "", text[4096] = "", dir[16] = "";
         extract_json_str(line, "sender", sender, sizeof(sender));
@@ -228,25 +236,24 @@ static void print_history(const char *filter_peer, int limit) {
 
         if (strcmp(dir, "OUT") == 0) {
             if (strncmp(text, "/me ", 4) == 0) {
-                printf("%s[OUT -> %s]%s %s✨ * %s %s%s\n", CLR_GRAY, peer, ANSI_RESET, CLR_PURPLE, g_local_name, text + 4, ANSI_RESET);
+                printf("[ACTION] * %s %s\n", g_local_name, text + 4);
             } else {
-                printf("%s[OUT -> %s]%s %sYou%s: %s\n", CLR_GRAY, peer, ANSI_RESET, CLR_CYAN ANSI_BOLD, ANSI_RESET, text);
+                printf("[SEND] <%s> %s\n", g_local_name, text);
             }
         } else {
             char dname[128];
             format_peer_display_name(sender, dname, sizeof(dname));
             if (strncmp(text, "/me ", 4) == 0) {
-                printf("%s[IN  <- %s]%s %s✨ * %s %s%s\n", CLR_GRAY, dname, ANSI_RESET, CLR_PURPLE, dname, text + 4, ANSI_RESET);
+                printf("[ACTION] * %s %s\n", dname, text + 4);
             } else {
-                printf("%s[IN  <- %s]%s %s<%s>%s %s\n", CLR_GRAY, dname, ANSI_RESET, CLR_GREEN, dname, ANSI_RESET, text);
+                printf("[RECV] <%s> %s\n", dname, text);
             }
         }
         count++;
         if (limit > 0 && count >= limit) break;
     }
     fclose(f);
-    printf("%s────────────────────────────────────────────────────────%s\n", CLR_GRAY, ANSI_RESET);
-    if (count == 0) printf("No matching messages.\n");
+    if (count == 0) printf("  (none)\n");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -256,8 +263,8 @@ static void print_history(const char *filter_peer, int limit) {
 static void print_links(int port) {
     struct ifaddrs *ifaddr, *ifa;
     if (getifaddrs(&ifaddr) == -1) {
-        printf("  %s[IPv6]%s  localhost:           http://[::1]:%d/\n", CLR_CYAN, ANSI_RESET, port);
-        printf("  %s[IPv4]%s  localhost:           http://127.0.0.1:%d/\n", CLR_BLUE, ANSI_RESET, port);
+        printf("    [ipv6] http://[::1]:%d/\n", port);
+        printf("    [ipv4] http://127.0.0.1:%d/\n", port);
         return;
     }
 
@@ -270,7 +277,7 @@ static void print_links(int port) {
             if (!IN6_IS_ADDR_LOOPBACK(&sin6->sin6_addr) && !IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
                 char host[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
-                printf("  %s[IPv6]%s     %-18s http://[%s]:%d/\n", CLR_CYAN, ANSI_RESET, ifa->ifa_name, host, port);
+                printf("    [ipv6] http://[%s]:%d/\n", host, port);
                 found++;
             }
         }
@@ -284,7 +291,7 @@ static void print_links(int port) {
             if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
                 char host[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
-                printf("  %s[IPv6-LL]%s  %-18s http://[%s]:%d/\n", CLR_PURPLE, ANSI_RESET, ifa->ifa_name, host, port);
+                printf("    [ipv6-ll] http://[%s]:%d/\n", host, port);
                 found++;
             }
         }
@@ -298,7 +305,7 @@ static void print_links(int port) {
             if (sin->sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
                 char host[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host));
-                printf("  %s[IPv4]%s     %-18s http://%s:%d/\n", CLR_BLUE, ANSI_RESET, ifa->ifa_name, host, port);
+                printf("    [ipv4] http://%s:%d/\n", host, port);
                 found++;
             }
         }
@@ -306,8 +313,8 @@ static void print_links(int port) {
 
     freeifaddrs(ifaddr);
     if (!found) {
-        printf("  %s[IPv6]%s  localhost:           http://[::1]:%d/\n", CLR_CYAN, ANSI_RESET, port);
-        printf("  %s[IPv4]%s  localhost:           http://127.0.0.1:%d/\n", CLR_BLUE, ANSI_RESET, port);
+        printf("    [ipv6] http://[::1]:%d/\n", port);
+        printf("    [ipv4] http://127.0.0.1:%d/\n", port);
     }
 }
 
@@ -449,7 +456,7 @@ static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
     snprintf(request, sizeof(request),
              "GET /api/chat/info HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: girchat-c/1.0.0\r\nConnection: close\r\n\r\n",
              host, port);
-    write(sock, request, strlen(request));
+    safe_write(sock, request, strlen(request));
 
     char response[1024];
     ssize_t n = read(sock, response, sizeof(response) - 1);
@@ -489,7 +496,7 @@ static bool send_connect(const char *peer, const char *local_name, int local_por
              "Connection: close\r\n\r\n%s",
              host, port, strlen(json_body), json_body);
 
-    write(sock, request, strlen(request));
+    safe_write(sock, request, strlen(request));
 
     char response[1024];
     ssize_t n = read(sock, response, sizeof(response) - 1);
@@ -530,9 +537,10 @@ static void send_disconnect(const char *peer, const char *local_name) {
              "Connection: close\r\n\r\n%s",
              host, port, strlen(json_body), json_body);
 
-    write(sock, request, strlen(request));
+    safe_write(sock, request, strlen(request));
     char buf[256];
-    read(sock, buf, sizeof(buf));
+    ssize_t r = read(sock, buf, sizeof(buf));
+    (void)r;
     close(sock);
 }
 
@@ -621,7 +629,7 @@ static void handle_static_file(int client_sock, const char *req_path) {
     }
 
     if (S_ISDIR(st.st_mode)) {
-        char index_path[4096];
+        char index_path[4200];
         snprintf(index_path, sizeof(index_path), "%s/index.html", full_path);
         if (stat(index_path, &st) == 0 && S_ISREG(st.st_mode)) {
             strncpy(full_path, index_path, sizeof(full_path) - 1);
@@ -632,7 +640,7 @@ static void handle_static_file(int client_sock, const char *req_path) {
             char html[8192];
             int pos = snprintf(html, sizeof(html),
                 "<!DOCTYPE html><html><head><title>Index of %s</title></head><body>"
-                "<h2>⚡ Index of %s</h2><ul>", clean_path, clean_path);
+                "<h2>Index of %s</h2><ul>", clean_path, clean_path);
             if (strcmp(clean_path, "/") != 0) {
                 pos += snprintf(html + pos, sizeof(html) - pos, "<li><a href='../'>..</a></li>");
             }
@@ -738,8 +746,7 @@ static void *handle_client(void *arg) {
 
             char dname[128];
             format_peer_display_name(name, dname, sizeof(dname));
-            printf("\r\033[2K%s🟢 Peer connected: <%s> (%s)%s\n",
-                   CLR_GREEN ANSI_BOLD, dname, g_active_peer, ANSI_RESET);
+            printf("\r\033[2K[CONNECT] %s <%s>\n", g_active_peer, dname);
             print_prompt();
 
             char resp_body[256];
@@ -750,7 +757,7 @@ static void *handle_client(void *arg) {
             snprintf(resp, sizeof(resp),
                      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                      strlen(resp_body), resp_body);
-            write(client_sock, resp, strlen(resp));
+            safe_write(client_sock, resp, strlen(resp));
         }
     } else if (strncmp(buffer, "POST /api/chat/disconnect", 25) == 0) {
         char *body = strstr(buffer, "\r\n\r\n");
@@ -760,14 +767,14 @@ static void *handle_client(void *arg) {
             extract_json_str(body, "name", name, sizeof(name));
             char dname[128];
             format_peer_display_name(name, dname, sizeof(dname));
-            printf("\r\033[2K%s🔴 <%s> disconnected.%s\n", CLR_RED, dname, ANSI_RESET);
+            printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
             if (g_is_host) {
                 g_active_peer[0] = '\0';
                 g_peer_name[0] = '\0';
             }
             print_prompt();
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
-            write(client_sock, resp, strlen(resp));
+            safe_write(client_sock, resp, strlen(resp));
         }
     } else if (strncmp(buffer, "POST /api/chat/message", 22) == 0) {
         char *body = strstr(buffer, "\r\n\r\n");
@@ -800,18 +807,18 @@ static void *handle_client(void *arg) {
 
             printf("\r\033[2K");
             if (strncmp(text, "/me ", 4) == 0) {
-                printf("%s[%02d:%02d:%02d]%s %s✨ * %s %s%s\n",
-                       CLR_GRAY, tm->tm_hour, tm->tm_min, tm->tm_sec, ANSI_RESET,
-                       CLR_PURPLE, dname, text + 4, ANSI_RESET);
+                printf("[ACTION] %02d:%02d:%02d * %s %s\n",
+                       tm->tm_hour, tm->tm_min, tm->tm_sec,
+                       dname, text + 4);
             } else {
-                printf("%s[%02d:%02d:%02d]%s %s💬 <%s>%s %s\n",
-                       CLR_GRAY, tm->tm_hour, tm->tm_min, tm->tm_sec, ANSI_RESET,
-                       CLR_GREEN ANSI_BOLD, dname, ANSI_RESET, text);
+                printf("[RECV] %02d:%02d:%02d <%s> %s\n",
+                       tm->tm_hour, tm->tm_min, tm->tm_sec,
+                       dname, text);
             }
             print_prompt();
 
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
-            write(client_sock, resp, strlen(resp));
+            safe_write(client_sock, resp, strlen(resp));
         }
     } else if (strncmp(buffer, "GET /api/chat/info", 18) == 0) {
         char resp_body[256];
@@ -822,7 +829,7 @@ static void *handle_client(void *arg) {
         snprintf(resp, sizeof(resp),
                  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                  strlen(resp_body), resp_body);
-        write(client_sock, resp, strlen(resp));
+        safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "GET /_shnet/status", 18) == 0) {
         char resp_body[256];
         snprintf(resp_body, sizeof(resp_body),
@@ -832,7 +839,7 @@ static void *handle_client(void *arg) {
         snprintf(resp, sizeof(resp),
                  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
                  strlen(resp_body), resp_body);
-        write(client_sock, resp, strlen(resp));
+        safe_write(client_sock, resp, strlen(resp));
     } else {
         const char *p = buffer + 4;
         const char *end = strchr(p, ' ');
@@ -922,18 +929,14 @@ static int bind_dual_stack_server(int preferred_port, int *out_port) {
 
 static void print_prompt(void) {
     char dname[128];
-    const char *ptag;
     if (g_peer_name[0]) {
         format_peer_display_name(g_peer_name, dname, sizeof(dname));
-        ptag = dname;
+        printf("%s[%s]> ", g_local_name, dname);
     } else if (g_active_peer[0]) {
-        ptag = g_active_peer;
+        printf("%s[%s]> ", g_local_name, g_active_peer);
     } else {
-        ptag = "waiting...";
+        printf("%s> ", g_local_name);
     }
-    const char *status_icon = g_active_peer[0] ? "🟢" : "⏳";
-    printf("%s[%s %s%s%s ❯ %s%s%s] %s❯ %s",
-           CLR_GRAY, status_icon, CLR_GOLD, g_local_name, CLR_GRAY, CLR_GREEN, ptag, CLR_GRAY, CLR_CYAN, ANSI_RESET);
     fflush(stdout);
 }
 
@@ -942,35 +945,35 @@ static void print_prompt(void) {
 /* ------------------------------------------------------------------------- */
 
 static void print_chat_help(void) {
-    printf("%s%sGIRCHAT / IRChat Commands:%s\n", CLR_CYAN, ANSI_BOLD, ANSI_RESET);
-    printf("  /nick <name>     Change your persistent nickname (saved to ~/.shnet/identity)\n");
-    printf("  /me <action>     Send IRC action (e.g. /me waves to peer)\n");
-    printf("  /whois           Display identity and connection details for active peer\n");
-    printf("  /peer <url>      Connect or change target peer (e.g. /peer [2409:...]:8723)\n");
-    printf("  /history [n]     Show the last [n] messages with the current peer\n");
-    printf("  /peers           List recent mesh peers from chat history\n");
-    printf("  /info, /status   Show your listening addresses, port, and IPv6/IPv4 links\n");
-    printf("  /qr              Display terminal ANSI QR code of your node\n");
-    printf("  /clear           Clear the terminal screen\n");
-    printf("  /help            Show this command reference\n");
-    printf("  /exit, /quit     Exit chat and stop local listener\n");
+    printf("commands:\n");
+    printf("  /nick <name>     set persistent nickname\n");
+    printf("  /me <action>     send action message\n");
+    printf("  /whois           show peer connection info\n");
+    printf("  /peer <url>      connect to target node\n");
+    printf("  /history [n]     show last [n] messages\n");
+    printf("  /peers           list known peers\n");
+    printf("  /info, /status   show node status & links\n");
+    printf("  /qr              show terminal QR code\n");
+    printf("  /clear           clear screen\n");
+    printf("  /help            show command help\n");
+    printf("  /exit, /quit     disconnect and exit\n");
 }
 
 static void print_whois(void) {
-    printf("%s%sWHOIS Information:%s\n", CLR_CYAN, ANSI_BOLD, ANSI_RESET);
-    printf("  Local Nick:   %s%s%s\n", CLR_GOLD, g_local_name, ANSI_RESET);
-    printf("  Local Port:   %d (Dual-Stack IPv6/IPv4)\n", g_local_port);
+    printf("[WHOIS]\n");
+    printf("  local: %s (port %d)\n", g_local_name, g_local_port);
     if (g_active_peer[0]) {
-        printf("  Peer URL:     %s\n", g_active_peer);
-        printf("  Peer Nick:    %s%s%s\n", CLR_GREEN, g_peer_name[0] ? g_peer_name : "(unknown)", ANSI_RESET);
+        char dname[128];
+        format_peer_display_name(g_peer_name, dname, sizeof(dname));
+        printf("  peer:  %s (%s)\n", g_peer_name[0] ? dname : "unknown", g_active_peer);
         if (g_peer_name[0] && strcasecmp(g_peer_name, g_local_name) == 0) {
-            printf("  Disambiguated: %s<%s#peer>%s (shares your nickname)\n", CLR_PURPLE, g_peer_name, ANSI_RESET);
+            printf("  alias: %s#peer\n", g_peer_name);
         }
         char test_name[128];
         bool online = ping_peer(g_active_peer, test_name, sizeof(test_name));
-        printf("  Peer Status:  %s\n", online ? (CLR_GREEN "Online" ANSI_RESET) : (CLR_RED "Unreachable" ANSI_RESET));
+        printf("  state: %s\n", online ? "online" : "offline");
     } else {
-        printf("  Peer:         %s(no peer connected)%s\n", CLR_GRAY, ANSI_RESET);
+        printf("  peer:  none\n");
     }
 }
 
@@ -1002,51 +1005,31 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     pthread_t stid;
     pthread_create(&stid, NULL, server_thread, (void *)(intptr_t)server_sock);
 
-    printf("%s   ____ ___ ____   ____ _   _    _  _____ \n"
-           "  / ___|_ _|  _ \\ / ___| | | |  / \\|_   _|\n"
-           " | |  _ | || |_) | |   | |_| | / _ \\ | |  \n"
-           " | |_| || ||  _ <| |___|  _  |/ ___ \\| |  \n"
-           "  \\____|___|_| \\_\\\\____|_| |_/_/   \\_\\_|  v%s (Native C)%s\n",
-           CLR_CYAN, GIRCHAT_VERSION, ANSI_RESET);
-    printf("%s  🌐 Dual-Stack IPv6 Peer Mesh Communicator%s\n\n", CLR_BLUE, ANSI_RESET);
-
-    printf("👤 Identity:    %s%s%s%s\n", CLR_GOLD, ANSI_BOLD, g_local_name, ANSI_RESET);
-    if (g_is_host) {
-        printf("🏷️  Role:        %sHost (listening on port %d)%s\n", CLR_GOLD, g_local_port, ANSI_RESET);
-    } else {
-        printf("🏷️  Role:        %sClient & Host (listening on port %d)%s\n", CLR_GREEN, g_local_port, ANSI_RESET);
-    }
-    printf("📡 Port:        %d (Dual-Stack IPv6 & IPv4)\n", g_local_port);
-    printf("🌐 Your Links: \n");
+    printf("girchat %s [dual-stack ipv6]\n", GIRCHAT_VERSION);
+    printf("node: %s | port: %d\n", g_local_name, g_local_port);
     print_links(g_local_port);
     if (g_active_peer[0]) {
         char dname[128];
         format_peer_display_name(g_peer_name, dname, sizeof(dname));
-        printf("🟢 Active Peer: %s%s%s%s%s\n", ANSI_BOLD, dname[0] ? "<" : "", dname[0] ? dname : g_active_peer, dname[0] ? ">" : "", ANSI_RESET);
+        printf("peer: %s @ %s\n", dname, g_active_peer);
+    } else {
+        printf("state: listening\n");
     }
-    printf("%s────────────────────────────────────────────────────────────────%s\n", CLR_GRAY, ANSI_RESET);
-    printf("Commands: %s/nick <name>%s, %s/me <action>%s, %s/whois%s, %s/peer <url>%s, %s/qr%s, %s/exit%s\n",
-           CLR_CYAN, ANSI_RESET, CLR_CYAN, ANSI_RESET, CLR_CYAN, ANSI_RESET, CLR_CYAN, ANSI_RESET, CLR_CYAN, ANSI_RESET, CLR_CYAN, ANSI_RESET);
-    printf("%s────────────────────────────────────────────────────────────────\n\n%s", CLR_GRAY, ANSI_RESET);
+    printf("commands: /nick /me /whois /peer /peers /history /qr /exit\n\n");
 
     if (g_active_peer[0]) {
-        printf("%s📡 Connecting to %s... %s", CLR_GRAY, g_active_peer, ANSI_RESET);
-        fflush(stdout);
         if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
-            printf("%s🟢 Connected to <%s>%s\n", CLR_GREEN, dname, ANSI_RESET);
+            printf("[CONNECT] %s <%s>\n", g_active_peer, dname);
         } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name))) {
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
-            printf("%s🟢 Online (<%s>)%s\n", CLR_GREEN, dname, ANSI_RESET);
+            printf("[ONLINE] %s <%s>\n", g_active_peer, dname);
         } else {
-            printf("%s⏳ Offline / unreachable, messages will attempt delivery when sent.%s\n", CLR_GOLD, ANSI_RESET);
+            printf("[OFFLINE] %s\n", g_active_peer);
         }
-        print_history(g_active_peer, 5);
-    } else {
-        printf("%s⏳ Waiting for peer to connect on port %d...%s\n", CLR_GOLD, g_local_port, ANSI_RESET);
-        printf("%s   (Run 'girchat' in another terminal or device to mesh connect)\n\n%s", CLR_GRAY, ANSI_RESET);
+        print_history(g_active_peer, 10);
     }
 
     char line[4096];
@@ -1065,15 +1048,20 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                 const char *tgt = (line[1] == 'p') ? line + 6 : line + 9;
                 while (*tgt == ' ') tgt++;
                 strncpy(g_active_peer, tgt, sizeof(g_active_peer) - 1);
-                printf("%s📡 Connecting to %s... %s", CLR_GRAY, g_active_peer, ANSI_RESET);
-                fflush(stdout);
                 if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
                     char dname[128];
                     format_peer_display_name(g_peer_name, dname, sizeof(dname));
-                    printf("%s🟢 Connected to <%s>%s\n", CLR_GREEN, dname, ANSI_RESET);
+                    printf("[CONNECT] %s <%s>\n", g_active_peer, dname);
+                } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name))) {
+                    char dname[128];
+                    format_peer_display_name(g_peer_name, dname, sizeof(dname));
+                    printf("[ONLINE] %s <%s>\n", g_active_peer, dname);
                 } else {
-                    printf("Active peer set to: %s\n", g_active_peer);
+                    printf("[OFFLINE] %s\n", g_active_peer);
                 }
+                print_history(g_active_peer, 10);
+            } else if (strcmp(line, "/peer") == 0 || strcmp(line, "/connect") == 0) {
+                printf("[PEER] %s\n", g_active_peer[0] ? g_active_peer : "none");
             } else if (strncmp(line, "/nick ", 6) == 0 || strncmp(line, "/name ", 6) == 0) {
                 const char *new_nick = line + 6;
                 while (*new_nick == ' ') new_nick++;
@@ -1085,43 +1073,57 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                     if (g_active_peer[0]) {
                         send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name));
                     }
-                    printf("%s✨ Nickname changed from <%s> to <%s>%s\n", CLR_GOLD, old_name, g_local_name, ANSI_RESET);
+                    printf("[NICK] %s -> %s\n", old_name, g_local_name);
                 } else {
-                    printf("Current nickname: %s\n", g_local_name);
+                    printf("[NICK] %s\n", g_local_name);
                 }
+            } else if (strcmp(line, "/nick") == 0 || strcmp(line, "/name") == 0) {
+                printf("[NICK] %s\n", g_local_name);
             } else if (strncmp(line, "/me ", 4) == 0) {
                 const char *action = line + 4;
                 while (*action == ' ') action++;
                 if (!g_active_peer[0]) {
-                    printf("%s🔴 No peer connected yet. Waiting for a peer, or use /peer <host:port> to connect.%s\n", CLR_RED, ANSI_RESET);
+                    printf("[ERROR] no active peer (use /peer <url>)\n");
                 } else {
                     if (send_http_message(g_active_peer, g_local_name, line, g_local_port)) {
                         time_t now = time(NULL);
                         struct tm *tm = localtime(&now);
-                        printf("%s[%02d:%02d:%02d]%s %s✨ * %s %s%s\n",
-                               CLR_GRAY, tm->tm_hour, tm->tm_min, tm->tm_sec, ANSI_RESET,
-                               CLR_PURPLE, g_local_name, action, ANSI_RESET);
+                        printf("[ACTION] %02d:%02d:%02d * %s %s\n",
+                               tm->tm_hour, tm->tm_min, tm->tm_sec,
+                               g_local_name, action);
                     } else {
-                        printf("%s🔴 Failed to deliver to %s%s\n", CLR_RED, g_active_peer, ANSI_RESET);
+                        printf("[ERROR] send failed: delivery failed to %s\n", g_active_peer);
                     }
                 }
+            } else if (strcmp(line, "/me") == 0) {
+                printf("usage: /me <action>\n");
             } else if (strcmp(line, "/whois") == 0) {
                 print_whois();
             } else if (strcmp(line, "/history") == 0) {
                 print_history(g_active_peer, 20);
             } else if (strcmp(line, "/peers") == 0) {
+                printf("[PEERS]\n");
                 print_history("", 50);
             } else if (strcmp(line, "/info") == 0 || strcmp(line, "/status") == 0) {
-                printf("%s%sGIRCHAT Node Info:%s\n", CLR_CYAN, ANSI_BOLD, ANSI_RESET);
-                printf("  Identity: %s%s%s\n", CLR_GOLD, g_local_name, ANSI_RESET);
-                printf("  Role:     %s\n", g_is_host ? "Host" : "Client & Host");
-                printf("  Port:     %d (Dual-Stack IPv6/IPv4)\n", g_local_port);
-                printf("  Peer:     %s\n", g_active_peer[0] ? g_active_peer : "(waiting for peer)");
-                printf("  Mesh Network Links:\n");
+                printf("[STATUS]\n");
+                printf("  node:  %s\n", g_local_name);
+                printf("  role:  %s\n", g_is_host ? "host" : "client/host");
+                printf("  port:  %d\n", g_local_port);
+                if (g_peer_name[0]) {
+                    char dname[128];
+                    format_peer_display_name(g_peer_name, dname, sizeof(dname));
+                    printf("  peer:  %s @ %s\n", dname, g_active_peer);
+                } else if (g_active_peer[0]) {
+                    printf("  peer:  %s\n", g_active_peer);
+                } else {
+                    printf("  peer:  none\n");
+                }
+                printf("  links:\n");
                 print_links(g_local_port);
             } else if (strcmp(line, "/qr") == 0) {
                 char url[128];
                 snprintf(url, sizeof(url), "http://[::1]:%d/", g_local_port);
+                printf("[QR] %s\n", url);
                 print_qr_ansi(url);
             } else if (strcmp(line, "/clear") == 0) {
                 printf("\033[H\033[2J");
@@ -1131,20 +1133,20 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
             } else if (strcmp(line, "/exit") == 0 || strcmp(line, "/quit") == 0) {
                 break;
             } else {
-                printf("%sUnknown command: %s. Type /help for available commands.%s\n", CLR_RED, line, ANSI_RESET);
+                printf("[ERROR] unknown command: %s (try /help)\n", line);
             }
         } else {
             if (!g_active_peer[0]) {
-                printf("%s🔴 No peer connected yet. Waiting for a peer, or use /peer <host:port> to connect.%s\n", CLR_RED, ANSI_RESET);
+                printf("[ERROR] no active peer (use /peer <url>)\n");
             } else {
                 if (send_http_message(g_active_peer, g_local_name, line, g_local_port)) {
                     time_t now = time(NULL);
                     struct tm *tm = localtime(&now);
-                    printf("%s[%02d:%02d:%02d]%s %sYou%s: %s\n",
-                           CLR_GRAY, tm->tm_hour, tm->tm_min, tm->tm_sec, ANSI_RESET,
-                           CLR_CYAN ANSI_BOLD, ANSI_RESET, line);
+                    printf("[SEND] %02d:%02d:%02d <%s> %s\n",
+                           tm->tm_hour, tm->tm_min, tm->tm_sec,
+                           g_local_name, line);
                 } else {
-                    printf("%s🔴 Failed to deliver to %s%s\n", CLR_RED, g_active_peer, ANSI_RESET);
+                    printf("[ERROR] send failed: delivery failed to %s\n", g_active_peer);
                 }
             }
         }
@@ -1154,7 +1156,7 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
         send_disconnect(g_active_peer, g_local_name);
     }
     g_running = false;
-    printf("\n%s💨 Stopping node... %s%s👋 Goodbye.%s\n", CLR_GRAY, CLR_GREEN, ANSI_BOLD, ANSI_RESET);
+    printf("[STOP] node closed\n");
 }
 
 static void run_serve(const char *dir, int preferred_port, bool show_qr) {
@@ -1174,7 +1176,7 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
         return;
     }
 
-    printf("⚡ girchat / shnet (Native C) serving %s on port %d (Dual-Stack IPv6/IPv4)\n", g_static_dir, g_local_port);
+    printf("serving %s on port %d [dual-stack ipv6]\n", g_static_dir, g_local_port);
     print_links(g_local_port);
 
     if (show_qr) {
@@ -1265,10 +1267,10 @@ int main(int argc, char *argv[]) {
         }
         resolve_nickname(explicit_name, g_local_name, sizeof(g_local_name));
         if (send_http_message(peer, g_local_name, message, 0)) {
-            printf("✓ Sent to %s\n", peer);
+            printf("[OK] sent %s\n", peer);
             return 0;
         } else {
-            fprintf(stderr, "✗ Failed to deliver to %s\n", peer);
+            fprintf(stderr, "[ERROR] delivery failed %s\n", peer);
             return 1;
         }
     }

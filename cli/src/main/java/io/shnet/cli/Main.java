@@ -105,7 +105,7 @@ public final class Main {
                 : new DemoHandler();
         String nodeName = IdentityManager.resolveNickname(null);
         Shnet.Handler handler = new io.shnet.chat.ChatHandler(storage, nodeName, (msg) -> {
-            System.out.printf(Locale.US, "\n💬 [Message from <%s>]: %s\n", msg.sender, msg.text);
+            System.out.printf(Locale.US, "\n[RECV] <%s> %s\n", msg.sender, msg.text);
         }, baseHandler);
         ForegroundRunner.run(config, handler, opts.showQr, opts.saveQrPath);
     }
@@ -172,9 +172,9 @@ public final class Main {
         if (result.success) {
             ChatStorage storage = new ChatStorage();
             storage.save(msg);
-            System.out.println("✓ Sent to " + peerUrl + " (id: " + msg.id + ")");
+            System.out.println("[OK] sent " + peerUrl + " (id: " + msg.id + ")");
         } else {
-            System.err.println("✗ Delivery failed to " + peerUrl + ": " + result.error);
+            System.err.println("[ERROR] delivery failed " + peerUrl + ": " + result.error);
             System.exit(1);
         }
     }

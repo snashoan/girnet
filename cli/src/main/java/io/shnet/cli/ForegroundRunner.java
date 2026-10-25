@@ -89,8 +89,7 @@ public final class ForegroundRunner {
                 "\\___ \\| |_| |  \\| |  _|   | |  \n" +
                 " ___) |  _  | |\\  | |___  | |  \n" +
                 "|____/|_| |_|_| \\_|_____| |_|  v" + Shnet.VERSION + ANSI_RESET);
-        System.out.println();
-        System.out.println(ANSI_BOLD + "⚡ shnet node runtime (CLI)" + ANSI_RESET);
+        System.out.println("shnet node runtime (CLI)");
         System.out.println("Port:      " + port + (tls ? " (HTTPS/TLS)" : " (HTTP)"));
         System.out.println("Bind:      " + bindMode);
         if (staticDir != null) {

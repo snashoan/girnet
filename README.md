@@ -14,12 +14,12 @@
 
 ## Key Capabilities
 
-- **🌐 Dual-Stack IPv6 Peer Mesh & Priority**: Strongly prioritizes global routable IPv6 (`2409:...`, `2000::/3`, `fc00::/7`, `fd00::/8`) followed by link-local IPv6 (`fe80::`), and dual-stack socket binding (`IPV6_V6ONLY = 0`).
-- **💬 IRChat Terminal REPL**: Rich 256-color ANSI interface with status emojis (`💬`, `👤`, `❯`, `🟢`, `🔴`, `🏷️`, `✨`, `🌐`, `📡`, `⏳`, `💨`, `👋`, `⚡`).
-- **👤 Identity Persistence & Nickname Separation**: Persistent nickname stored in `~/.shnet/identity`. If local and peer nicknames match (e.g. both named `rei`), girchat disambiguates incoming messages as `<rei#peer>` vs `You` so chat logs are always distinct.
-- **⚡ IRC Commands**: Full interactive slash commands:
+- **Dual-Stack IPv6 Peer Mesh & Priority**: Strongly prioritizes global routable IPv6 (`2409:...`, `2000::/3`, `fc00::/7`, `fd00::/8`) followed by link-local IPv6 (`fe80::`), and dual-stack socket binding (`IPV6_V6ONLY = 0`).
+- **Clean Protocol-Style Terminal Logging**: Crisp, zero-emoji daemon protocol output (`[CONNECT]`, `[DISCONNECT]`, `[RECV]`, `[SEND]`, `[ACTION]`, `[NICK]`, `[STATUS]`, `[WHOIS]`) with compact prompt `rei[peer]> ` or `rei> `.
+- **Identity Persistence & Nickname Separation**: Persistent nickname stored in `~/.shnet/identity`. If local and peer nicknames match (e.g. both named `rei`), girchat disambiguates incoming messages as `rei#peer` vs `rei` so chat logs are always distinct.
+- **IRC Slash Commands**: Full interactive slash commands:
   - `/nick <name>` - Update and persist your nickname across sessions.
-  - `/me <action>` - IRC action message (`✨ * rei waves to peer`).
+  - `/me <action>` - Send action message (`[ACTION] 12:00:00 * rei waves to peer`).
   - `/whois` - Inspect identity, connection state, and latency for active peer.
   - `/peer <url>` - Connect to target peer (supports bracketed IPv6 `[2409:...]:8723`).
   - `/peers` - List recent mesh peers from storage history.
@@ -29,7 +29,7 @@
   - `/clear` - Clear terminal screen.
   - `/help` - Command reference.
   - `/exit` / `/quit` - Clean disconnect and node shutdown.
-- **📱 Multi-Platform Standalone Deployments**:
+- **Multi-Platform Standalone Deployments**:
   - **Java Fat JAR**: `shnet.jar` / `girchat.jar` (1.4MB, self-contained, zero Android SDK required).
   - **Native C Binary**: `shnet` / `girchat` (76KB, zero external dependencies, embedded QR generator).
   - **Pure Python 3**: `shnet.py` / `girchat.py` (87KB, single-file, zero pip dependencies).
@@ -54,19 +54,17 @@ girchat [2409:4055:2e3d:88c4::d5]:8723
 ### 2. Slash Commands in Chat
 
 ```irc
-[🟢 rei ❯ alice] ❯ /me smiles at the mesh
-[12:00:00] ✨ * rei smiles at the mesh
+rei[alice]> /me smiles at the mesh
+[ACTION] 12:00:00 * rei smiles at the mesh
 
-[🟢 rei ❯ alice] ❯ /whois
-WHOIS Information:
-  Local Nick:   rei
-  Local Port:   8723 (Dual-Stack IPv6/IPv4)
-  Peer URL:     http://[2409:4055:2e3d:88c4::d5]:8723/
-  Peer Nick:    alice
-  Peer Status:  Online
+rei[alice]> /whois
+[WHOIS]
+  local: rei (port 8723)
+  peer:  alice (http://[2409:4055:2e3d:88c4::d5]:8723/)
+  state: online
 
-[🟢 rei ❯ alice] ❯ /nick hoan
-✨ Nickname changed from <rei> to <hoan>
+rei[alice]> /nick hoan
+[NICK] rei -> hoan
 ```
 
 ### 3. One-Shot Send & History

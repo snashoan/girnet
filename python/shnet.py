@@ -983,7 +983,7 @@ def resolve_nickname(cli_name=None) -> str:
 
     if sys.stdin.isatty():
         try:
-            sys.stdout.write("\033[38;5;220m✨ Welcome to girchat! Enter your nickname [default: rei]: \033[0m")
+            sys.stdout.write("nickname [rei]: ")
             sys.stdout.flush()
             val = sys.stdin.readline()
             if val and val.strip():
@@ -1375,7 +1375,7 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
                 })
             elif path == "/_shnet/links":
                 links = get_local_links(self.server.server_port)
-                html = "<html><body><h2>⚡ shnet links</h2><ul>"
+                html = "<html><body><h2>shnet links</h2><ul>"
                 for l in links:
                     html += f"<li><strong>{l['label']}</strong>: <a href='{l['url']}'>{l['url']}</a></li>"
                 html += "</ul></body></html>"
@@ -1648,9 +1648,11 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
         return sender.strip()
 
     def prompt():
-        ptag = format_peer_display_name(peer_name) if peer_name else (normalize_peer(active_peer) if active_peer else "waiting...")
-        status_icon = "🟢" if active_peer else "⏳"
-        sys.stdout.write(f"{CLR_GRAY}[{status_icon} {CLR_GOLD}{name}{CLR_GRAY} ❯ {CLR_GREEN}{ptag}{CLR_GRAY}] {ANSI_RESET}{CLR_CYAN}❯ {ANSI_RESET}")
+        ptag = format_peer_display_name(peer_name) if peer_name else (normalize_peer(active_peer) if active_peer else "")
+        if ptag:
+            sys.stdout.write(f"{name}[{ptag}]> ")
+        else:
+            sys.stdout.write(f"{name}> ")
         sys.stdout.flush()
 
     def on_incoming(msg):
@@ -1659,9 +1661,9 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
         sys.stdout.write("\r\033[2K")
         if msg.text and msg.text.startswith("/me "):
             action = msg.text[4:].strip()
-            sys.stdout.write(f"{CLR_GRAY}[{t_str}]{ANSI_RESET} {CLR_PURPLE}✨ * {dname} {action}{ANSI_RESET}\n")
+            sys.stdout.write(f"[ACTION] {t_str} * {dname} {action}\n")
         else:
-            sys.stdout.write(f"{CLR_GRAY}[{t_str}]{ANSI_RESET} {CLR_GREEN}{ANSI_BOLD}💬 <{dname}>{ANSI_RESET} {msg.text}\n")
+            sys.stdout.write(f"[RECV] {t_str} <{dname}> {msg.text}\n")
         prompt()
 
     def on_connect(name_in, url_in):
@@ -1671,13 +1673,13 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
         peer_name = name_in
         if was_new:
             dname = format_peer_display_name(name_in)
-            sys.stdout.write(f"\r\033[2K{CLR_GREEN}{ANSI_BOLD}🟢 Peer connected: <{dname}> ({url_in}){ANSI_RESET}\n")
+            sys.stdout.write(f"\r\033[2K[CONNECT] {url_in} <{dname}>\n")
             prompt()
 
     def on_disconnect(name_in):
         nonlocal active_peer, peer_name
         dname = format_peer_display_name(name_in)
-        sys.stdout.write(f"\r\033[2K{CLR_RED}🔴 <{dname}> disconnected.{ANSI_RESET}\n")
+        sys.stdout.write(f"\r\033[2K[DISCONNECT] <{dname}>\n")
         if is_host:
             active_peer = None
             peer_name = None
@@ -1693,68 +1695,54 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
     links = get_local_links(actual_port)
     primary_url = links[0]["url"] if links else f"http://127.0.0.1:{actual_port}/"
 
-    print(f"{CLR_CYAN}   ____ ___ ____   ____ _   _    _  _____ \n"
-          f"  / ___|_ _|  _ \\ / ___| | | |  / \\|_   _|\n"
-          f" | |  _ | || |_) | |   | |_| | / _ \\ | |  \n"
-          f" | |_| || ||  _ <| |___|  _  |/ ___ \\| |  \n"
-          f"  \\____|___|_| \\_\\\\____|_| |_/_/   \\_\\_|  v{VERSION} (Python){ANSI_RESET}")
-    print(f"{CLR_BLUE}  🌐 Dual-Stack IPv6 Peer Mesh Communicator{ANSI_RESET}\n")
-    print(f"👤 Identity:    {CLR_GOLD}{ANSI_BOLD}{name}{ANSI_RESET}")
-    print(f"🏷️  Role:        {CLR_GOLD}Host (listening on port {actual_port}){ANSI_RESET}" if is_host else f"🏷️  Role:        {CLR_GREEN}Client & Host (listening on port {actual_port}){ANSI_RESET}")
-    print(f"📡 Port:        {actual_port} (Dual-Stack IPv6 & IPv4)")
-    print(f"🌐 Your Links:  {primary_url}")
-    for l in links[1:]:
-        print(f"                {l['url']}")
+    print(f"girchat {VERSION} [dual-stack ipv6]")
+    print(f"node: {name} | port: {actual_port}")
+    for l in links:
+        badge = "ipv6" if l["isIpv6"] else "ipv4"
+        print(f"link [{badge}]: {l['url']}")
     if active_peer:
         dname = format_peer_display_name(peer_name) if peer_name else active_peer
-        print(f"🟢 Active Peer: {ANSI_BOLD}{dname}{ANSI_RESET}")
-    print(f"💾 Storage:     {storage.history_file}")
-    print(f"{CLR_GRAY}────────────────────────────────────────────────────────────────{ANSI_RESET}")
-    print(f"Commands: {CLR_CYAN}/nick <name>{ANSI_RESET}, {CLR_CYAN}/me <action>{ANSI_RESET}, {CLR_CYAN}/whois{ANSI_RESET}, {CLR_CYAN}/peer <url>{ANSI_RESET}, {CLR_CYAN}/peers{ANSI_RESET}, {CLR_CYAN}/history{ANSI_RESET}, {CLR_CYAN}/qr{ANSI_RESET}, {CLR_CYAN}/exit{ANSI_RESET}")
-    print(f"{CLR_GRAY}────────────────────────────────────────────────────────────────\n{ANSI_RESET}")
+        print(f"peer: {dname} @ {active_peer}")
+    else:
+        print("state: listening")
+    print("commands: /nick /me /whois /peer /peers /history /qr /exit\n")
 
     def connect_to(target_url):
         nonlocal active_peer, peer_name
-        sys.stdout.write(f"{CLR_GRAY}📡 Connecting to {target_url}... {ANSI_RESET}")
-        sys.stdout.flush()
         ok, p_name, p_url = connect_peer(target_url, name, actual_port)
         if ok:
             peer_name = p_name
             active_peer = p_url
             dname = format_peer_display_name(peer_name)
-            print(f"{CLR_GREEN}🟢 Connected to <{dname}>{ANSI_RESET}")
+            print(f"[CONNECT] {active_peer} <{dname}>")
         else:
             info = ping_peer(target_url)
             if info:
                 peer_name = info.get("name", "node")
                 active_peer = format_peer_url(target_url)
                 dname = format_peer_display_name(peer_name)
-                print(f"{CLR_GREEN}🟢 Online (<{dname}>){ANSI_RESET}")
+                print(f"[ONLINE] {active_peer} <{dname}>")
             else:
-                print(f"{CLR_GOLD}⏳ Peer unreachable, messages will attempt delivery when sent.{ANSI_RESET}")
+                print(f"[OFFLINE] {target_url}")
 
     if active_peer:
         connect_to(active_peer)
         hist = storage.get_history(active_peer, 10)
         if hist:
-            print(f"{CLR_GRAY}─── Recent History ({len(hist)} messages) ───────────────────{ANSI_RESET}")
+            print(f"[HISTORY] {active_peer} ({len(hist)} messages)")
             for m in hist:
                 t = datetime.fromtimestamp(m.timestamp / 1000).strftime("%H:%M:%S")
                 if m.direction == "OUT":
                     if m.text and m.text.startswith("/me "):
-                        print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_PURPLE}✨ * You ({name}) {m.text[4:].strip()}{ANSI_RESET}")
+                        print(f"[ACTION] {t} * {name} {m.text[4:].strip()}")
                     else:
-                        print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_CYAN}You{ANSI_RESET}: {m.text}")
+                        print(f"[SEND] {t} <{name}> {m.text}")
                 else:
                     dname = format_peer_display_name(m.sender)
                     if m.text and m.text.startswith("/me "):
-                        print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_PURPLE}✨ * {dname} {m.text[4:].strip()}{ANSI_RESET}")
+                        print(f"[ACTION] {t} * {dname} {m.text[4:].strip()}")
                     else:
-                        print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_GREEN}<{dname}>{ANSI_RESET}: {m.text}")
-            print(f"{CLR_GRAY}────────────────────────────────────────────────────────{ANSI_RESET}")
-    else:
-        print(f"{CLR_GOLD}⏳ Waiting for peer to connect on port {actual_port}...{ANSI_RESET}")
-        print(f"{CLR_GRAY}   (Run 'girchat' in another terminal or device to mesh connect)\n{ANSI_RESET}")
+                        print(f"[RECV] {t} <{dname}> {m.text}")
 
     prompt()
 
@@ -1775,9 +1763,25 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
 
                 if cmd in ("/peer", "/connect"):
                     if not arg:
-                        print(f"Current peer: {active_peer or '(none)'}")
+                        print(f"[PEER] {active_peer or 'none'}")
                     else:
                         connect_to(arg)
+                        hist = storage.get_history(active_peer, 10)
+                        if hist:
+                            print(f"[HISTORY] {active_peer} ({len(hist)} messages)")
+                            for m in hist:
+                                t = datetime.fromtimestamp(m.timestamp / 1000).strftime("%H:%M:%S")
+                                if m.direction == "OUT":
+                                    if m.text and m.text.startswith("/me "):
+                                        print(f"[ACTION] {t} * {name} {m.text[4:].strip()}")
+                                    else:
+                                        print(f"[SEND] {t} <{name}> {m.text}")
+                                else:
+                                    dname = format_peer_display_name(m.sender)
+                                    if m.text and m.text.startswith("/me "):
+                                        print(f"[ACTION] {t} * {dname} {m.text[4:].strip()}")
+                                    else:
+                                        print(f"[RECV] {t} <{dname}> {m.text}")
                 elif cmd in ("/nick", "/name"):
                     if arg:
                         old_name = name
@@ -1785,14 +1789,14 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
                         save_nickname(name)
                         if active_peer:
                             connect_peer(active_peer, name, actual_port)
-                        print(f"{CLR_GOLD}✨ Nickname changed from <{old_name}> to <{name}>{ANSI_RESET}")
+                        print(f"[NICK] {old_name} -> {name}")
                     else:
-                        print(f"Current nickname: {name}")
+                        print(f"[NICK] {name}")
                 elif cmd == "/me":
                     if not arg:
-                        print(f"{CLR_GOLD}Usage: /me <action description>{ANSI_RESET}")
+                        print("usage: /me <action>")
                     elif not active_peer:
-                        print(f"{CLR_RED}🔴 No peer connected yet. Waiting for a peer, or use /peer <host:port> to connect.{ANSI_RESET}")
+                        print("[ERROR] no active peer (use /peer <url>)")
                     else:
                         msg = ChatMessage(sender=name, peer=active_peer, text="/me " + arg, direction="OUT", reply_port=actual_port)
                         try:
@@ -1800,86 +1804,87 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
                             if code == 200:
                                 storage.save(msg)
                                 t = datetime.now().strftime("%H:%M:%S")
-                                print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_PURPLE}✨ * {name} {arg}{ANSI_RESET}")
+                                print(f"[ACTION] {t} * {name} {arg}")
                             else:
-                                print(f"{CLR_RED}🔴 Failed (HTTP {code}): {body}{ANSI_RESET}")
+                                print(f"[ERROR] send failed (HTTP {code}): {body}")
                         except Exception as ex:
-                            print(f"{CLR_RED}🔴 Failed to deliver to {active_peer}: {ex}{ANSI_RESET}")
+                            print(f"[ERROR] send failed: delivery failed to {active_peer}: {ex}")
                 elif cmd == "/whois":
-                    print(f"{CLR_CYAN}{ANSI_BOLD}WHOIS Information:{ANSI_RESET}")
-                    print(f"  Local Nick:   {CLR_GOLD}{name}{ANSI_RESET}")
-                    print(f"  Local Port:   {actual_port} (Dual-Stack IPv6/IPv4)")
+                    print("[WHOIS]")
+                    print(f"  local: {name} (port {actual_port})")
                     if active_peer:
-                        print(f"  Peer URL:     {active_peer}")
-                        print(f"  Peer Nick:    {CLR_GREEN}{peer_name or '(unknown)'}{ANSI_RESET}")
+                        dname = format_peer_display_name(peer_name) if peer_name else "unknown"
+                        print(f"  peer:  {dname} ({active_peer})")
                         if peer_name and peer_name.lower() == name.lower():
-                            print(f"  Disambiguated: {CLR_PURPLE}<{peer_name}#peer>{ANSI_RESET} (shares your nickname)")
+                            print(f"  alias: {peer_name}#peer")
                         p_info = ping_peer(active_peer)
-                        print(f"  Peer Status:  {CLR_GREEN + 'Online' + ANSI_RESET if p_info else CLR_RED + 'Unreachable' + ANSI_RESET}")
+                        print(f"  state: {'online' if p_info else 'offline'}")
                     else:
-                        print(f"  Peer:         {CLR_GRAY}(no peer connected){ANSI_RESET}")
+                        print("  peer:  none")
                 elif cmd == "/history":
                     lim = int(arg) if arg.isdigit() else 20
                     h = storage.get_history(active_peer, lim)
-                    print(f"{CLR_GRAY}─── Recent History ({len(h)} msgs) ──────────────────────{ANSI_RESET}")
+                    print(f"[HISTORY] {active_peer or 'all'} ({len(h)} messages)")
                     for m in h:
                         t = datetime.fromtimestamp(m.timestamp / 1000).strftime("%H:%M:%S")
                         if m.direction == "OUT":
                             if m.text and m.text.startswith("/me "):
-                                print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_PURPLE}✨ * You ({name}) {m.text[4:].strip()}{ANSI_RESET}")
+                                print(f"[ACTION] {t} * {name} {m.text[4:].strip()}")
                             else:
-                                print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_CYAN}You{ANSI_RESET}: {m.text}")
+                                print(f"[SEND] {t} <{name}> {m.text}")
                         else:
                             dname = format_peer_display_name(m.sender)
                             if m.text and m.text.startswith("/me "):
-                                print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_PURPLE}✨ * {dname} {m.text[4:].strip()}{ANSI_RESET}")
+                                print(f"[ACTION] {t} * {dname} {m.text[4:].strip()}")
                             else:
-                                print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_GREEN}<{dname}>{ANSI_RESET}: {m.text}")
-                    print(f"{CLR_GRAY}────────────────────────────────────────────────────────{ANSI_RESET}")
+                                print(f"[RECV] {t} <{dname}> {m.text}")
+                    if not h:
+                        print("  (none)")
                 elif cmd == "/peers":
                     peers = storage.get_recent_peers()
-                    print(f"{CLR_CYAN}{ANSI_BOLD}Recent Mesh Peers:{ANSI_RESET}")
+                    print("[PEERS]")
                     if not peers:
-                        print("  (no message history found)")
+                        print("  (none)")
                     else:
                         for p in peers:
-                            mark = f"{CLR_GREEN} (active){ANSI_RESET}" if active_peer and p in active_peer else ""
-                            print(f"  • {p}{mark}")
+                            mark = " (active)" if active_peer and p in active_peer else ""
+                            print(f"  {p}{mark}")
                 elif cmd == "/qr":
+                    print(f"[QR] {primary_url}")
                     print(render_qr_ansi(primary_url))
                 elif cmd in ("/info", "/status"):
-                    print(f"{CLR_CYAN}{ANSI_BOLD}GIRCHAT Node Info:{ANSI_RESET}")
-                    print(f"  Identity: {CLR_GOLD}{name}{ANSI_RESET}")
-                    print(f"  Role:     {'Host' if is_host else 'Client & Host'}")
-                    print(f"  Port:     {actual_port} (Dual-Stack IPv6/IPv4)")
-                    print(f"  Peer:     {active_peer or '(waiting for peer)'}")
-                    print(f"  Mesh Network Links:")
+                    print("[STATUS]")
+                    print(f"  node:  {name}")
+                    print(f"  role:  {'host' if is_host else 'client/host'}")
+                    print(f"  port:  {actual_port}")
+                    print(f"  peer:  {format_peer_display_name(peer_name) + ' @ ' + active_peer if (peer_name and active_peer) else (active_peer or 'none')}")
+                    print("  links:")
                     for l in links:
-                        badge = f"{CLR_CYAN}[IPv6]{ANSI_RESET}" if l["isIpv6"] else f"{CLR_BLUE}[IPv4]{ANSI_RESET}"
-                        print(f"    • {badge} {l['label']}: {l['url']}")
+                        badge = "ipv6" if l["isIpv6"] else "ipv4"
+                        print(f"    [{badge}] {l['url']}")
                 elif cmd == "/clear":
                     sys.stdout.write("\033[H\033[2J")
                     sys.stdout.flush()
                 elif cmd == "/help":
-                    print(f"{CLR_CYAN}{ANSI_BOLD}GIRCHAT / IRChat Commands:{ANSI_RESET}")
-                    print("  /nick <name>     Change your persistent nickname (saved to ~/.shnet/identity)")
-                    print("  /me <action>     Send IRC action (e.g. /me waves to peer)")
-                    print("  /whois           Display identity and connection details for active peer")
-                    print("  /peer <url>      Connect or change target peer (e.g. /peer [2409:...]:8723)")
-                    print("  /history [n]     Show the last [n] messages with the current peer")
-                    print("  /peers           List recent mesh peers from chat history")
-                    print("  /info, /status   Show your listening addresses, port, and IPv6/IPv4 links")
-                    print("  /qr              Display terminal ANSI QR code of your node")
-                    print("  /clear           Clear the terminal screen")
-                    print("  /help            Show this command reference")
-                    print("  /exit, /quit     Exit chat and stop local listener")
+                    print("commands:")
+                    print("  /nick <name>     set persistent nickname")
+                    print("  /me <action>     send action message")
+                    print("  /whois           show peer connection info")
+                    print("  /peer <url>      connect to target node")
+                    print("  /history [n]     show last [n] messages")
+                    print("  /peers           list known peers")
+                    print("  /info, /status   show node status & links")
+                    print("  /qr              show terminal QR code")
+                    print("  /clear           clear screen")
+                    print("  /help            show command help")
+                    print("  /exit, /quit     disconnect and exit")
                 elif cmd in ("/exit", "/quit"):
                     break
                 else:
-                    print(f"{CLR_RED}Unknown command: {cmd}. Type /help for assistance.{ANSI_RESET}")
+                    print(f"[ERROR] unknown command: {cmd} (try /help)")
             else:
                 if not active_peer:
-                    print(f"{CLR_RED}🔴 No peer connected yet. Waiting for a peer, or use /peer <host:port> to connect.{ANSI_RESET}")
+                    print("[ERROR] no active peer (use /peer <url>)")
                 else:
                     msg = ChatMessage(sender=name, peer=active_peer, text=line, direction="OUT", reply_port=actual_port)
                     try:
@@ -1887,11 +1892,11 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
                         if code == 200:
                             storage.save(msg)
                             t = datetime.now().strftime("%H:%M:%S")
-                            print(f"{CLR_GRAY}[{t}]{ANSI_RESET} {CLR_CYAN}{ANSI_BOLD}You{ANSI_RESET}: {line}")
+                            print(f"[SEND] {t} <{name}> {line}")
                         else:
-                            print(f"{CLR_RED}🔴 Failed (HTTP {code}): {body}{ANSI_RESET}")
+                            print(f"[ERROR] send failed (HTTP {code}): {body}")
                     except Exception as ex:
-                        print(f"{CLR_RED}🔴 Failed to deliver to {active_peer}: {ex}{ANSI_RESET}")
+                        print(f"[ERROR] send failed: delivery failed to {active_peer}: {ex}")
 
             prompt()
     except (KeyboardInterrupt, EOFError):
@@ -1899,9 +1904,8 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
     finally:
         if active_peer:
             disconnect_peer(active_peer, name)
-        print(f"\n{CLR_GRAY}💨 Shutting down local chat node...{ANSI_RESET}")
         server.shutdown()
-        print(f"{CLR_GREEN}👋 Goodbye.{ANSI_RESET}")
+        print("[STOP] node closed")
 
 # ---------------------------------------------------------------------------
 # Main CLI Entrypoint
@@ -1976,12 +1980,12 @@ def main():
             if code == 200:
                 storage = ChatStorage()
                 storage.save(msg)
-                print(f"✓ Sent to {peer_url} (id: {msg.id})")
+                print(f"[OK] sent {peer_url} (id: {msg.id})")
             else:
-                print(f"✗ Failed (HTTP {code}): {body}", file=sys.stderr)
+                print(f"[ERROR] failed (HTTP {code}): {body}", file=sys.stderr)
                 sys.exit(1)
         except Exception as e:
-            print(f"✗ Delivery failed to {peer_url}: {e}", file=sys.stderr)
+            print(f"[ERROR] delivery failed {peer_url}: {e}", file=sys.stderr)
             sys.exit(1)
 
     elif args.command == "history":

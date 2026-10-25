@@ -302,7 +302,7 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
                 })
             elif path == "/_shnet/links":
                 links = get_local_links(self.server.server_port)
-                html = "<html><body><h2>⚡ shnet links</h2><ul>"
+                html = "<html><body><h2>shnet links</h2><ul>"
                 for l in links:
                     html += f"<li><strong>{l['label']}</strong>: <a href='{l['url']}'>{l['url']}</a></li>"
                 html += "</ul></body></html>"
@@ -479,7 +479,7 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name="rei"):
           f" \\___ \\| |_| |  \\| |  _|   | |    | |   | |_| | / _ \\ | |  \n"
           f"  ___) |  _  | |\\  | |___  | |    | |___|  _  |/ ___ \\| |  \n"
           f" |____/|_| |_|_| \\_|_____| |_|     \\____|_| |_/_/   \\_\\_|  v{VERSION} (Python){ANSI_RESET}\n")
-    print(f"💬 {ANSI_BOLD}shnet CLI-to-CLI Peer Messaging{ANSI_RESET}")
+    print(f"{ANSI_BOLD}shnet CLI-to-CLI Peer Messaging{ANSI_RESET}")
     print(f"Identity:    {ANSI_BOLD}{name}{ANSI_RESET}")
     print(f"Port:        {actual_port}")
     print(f"Your Links:  {primary_url}")
@@ -496,7 +496,7 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name="rei"):
         print(f"{ANSI_GRAY}Connecting to {active_peer}... {ANSI_RESET}", end="", flush=True)
         info = ping_peer(active_peer)
         if info:
-            print(f"{ANSI_GREEN}✓ Online ({info.get('name', 'node')}){ANSI_RESET}")
+            print(f"{ANSI_GREEN}Online ({info.get('name', 'node')}){ANSI_RESET}")
         else:
             print(f"{ANSI_YELLOW}(offline / unreachable, messages will attempt delivery when sent){ANSI_RESET}")
 
@@ -562,7 +562,7 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name="rei"):
                     print(f"{ANSI_BOLD}Recent Peers:{ANSI_RESET}")
                     for p in peers:
                         mark = f"{ANSI_GREEN} (active){ANSI_RESET}" if active_peer and p in active_peer else ""
-                        print(f"  • {p}{mark}")
+                        print(f"  {p}{mark}")
                 elif cmd == "/qr":
                     print(render_qr_ansi(primary_url))
                 elif cmd == "/info":
@@ -666,12 +666,12 @@ def main():
             if code == 200:
                 storage = ChatStorage()
                 storage.save(msg)
-                print(f"✓ Sent to {peer_url} (id: {msg.id})")
+                print(f"[OK] sent {peer_url} (id: {msg.id})")
             else:
-                print(f"✗ Failed (HTTP {code}): {body}", file=sys.stderr)
+                print(f"[ERROR] failed (HTTP {code}): {body}", file=sys.stderr)
                 sys.exit(1)
         except Exception as e:
-            print(f"✗ Delivery failed to {peer_url}: {e}", file=sys.stderr)
+            print(f"[ERROR] delivery failed {peer_url}: {e}", file=sys.stderr)
             sys.exit(1)
 
     elif args.command == "history":

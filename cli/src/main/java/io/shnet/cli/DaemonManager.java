@@ -116,20 +116,19 @@ public final class DaemonManager {
                 port, bindMode, tls, serveDir != null ? serveDir : "", System.currentTimeMillis());
         Files.writeString(STATE_FILE.toPath(), state);
 
-        System.out.println("==================================================");
-        System.out.println("⚡ shnet node started in background (PID: " + pid + ")");
-        System.out.println("Port: " + port + (tls ? " (HTTPS)" : " (HTTP)"));
-        System.out.println("Bind: " + bindMode);
+        System.out.println("[START] shnet node started in background (PID: " + pid + ")");
+        System.out.println("port: " + port + (tls ? " (https)" : " (http)"));
+        System.out.println("bind: " + bindMode);
         if (serveDir != null && !serveDir.isEmpty()) {
-            System.out.println("Serving: " + serveDir);
+            System.out.println("serving: " + serveDir);
         }
-        System.out.println("Log: " + LOG_FILE.getAbsolutePath());
-        System.out.println("==================================================");
+        System.out.println("log: " + LOG_FILE.getAbsolutePath());
 
         List<Shnet.Link> links = Shnet.links(port, Shnet.LinkPreference.IPV6_FIRST, tls);
-        System.out.println("Network Links:");
+        System.out.println("links:");
         for (Shnet.Link link : links) {
-            System.out.println("  • " + link.label + ": " + link.url);
+            String badge = link.isIpv6 ? "ipv6" : "ipv4";
+            System.out.println("  [" + badge + "] " + link.url);
         }
         System.out.println();
         System.out.println("Commands:");
@@ -174,8 +173,7 @@ public final class DaemonManager {
             return;
         }
 
-        System.out.println("==================================================");
-        System.out.println("⚡ shnet status: RUNNING");
+        System.out.println("[STATUS] running");
         System.out.println("PID: " + pid);
 
         int port = Shnet.DEFAULT_PORT;
@@ -208,7 +206,8 @@ public final class DaemonManager {
         List<Shnet.Link> links = Shnet.links(port, Shnet.LinkPreference.IPV6_FIRST, tls);
         System.out.println("\nLinks:");
         for (Shnet.Link link : links) {
-            System.out.println("  • " + link.label + ": " + link.url);
+            String badge = link.isIpv6 ? "ipv6" : "ipv4";
+            System.out.println("  [" + badge + "] " + link.url);
         }
 
         System.out.println("\nRecent Logs (" + LOG_FILE.getAbsolutePath() + "):");
