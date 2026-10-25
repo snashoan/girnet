@@ -1,0 +1,42 @@
+plugins {
+    id 'application'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+    implementation project(':core')
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'io.shnet.cli.Main'
+    applicationName = 'shnet'
+}
+
+jar {
+    dependsOn(':core:jar')
+    manifest {
+        attributes(
+            'Main-Class': 'io.shnet.cli.Main',
+            'Implementation-Title': 'shnet',
+            'Implementation-Version': '1.0.0'
+        )
+    }
+    archiveBaseName = 'shnet'
+    archiveClassifier = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+
+test {
+    useJUnitPlatform()
+}

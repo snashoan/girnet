@@ -7,4 +7,9 @@
 /captures
 .externalNativeBuild/
 .cxx/
-/shnet/build/
+build/
+**/build/
+__pycache__/
+*.pyc
+c/shnet
+*.o

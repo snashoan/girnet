@@ -15,4 +15,10 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "shnet"
-include(":shnet")
+include(":core", ":cli")
+
+// Only include Android library module if Android SDK is configured
+if (System.getenv("ANDROID_HOME") != null || System.getenv("ANDROID_SDK_ROOT") != null || file("local.properties").exists()) {
+    include(":shnet")
+}
+

@@ -1,90 +1,123 @@
-# shnet
+# girchat / shnet
 
-shnet is a tiny, self-contained node runtime for device-owned apps. It provides:
-- a foreground node service (ephemeral or persistent)
-- a dual-stack HTTP listener (IPv6 preferred by default)
-- a minimal request/response handler
-- LAN link discovery + QR generation
-
-It does **not** include business logic (shops, payments, inventory). Those sit on top.
-
-## Minimal usage
-
-**Handler**
-```java
-public final class DemoHandler implements Shnet.Handler {
-    @Override
-    public Shnet.Response handle(Shnet.Request request) {
-        if ("/".equals(request.path)) {
-            return Shnet.Response.text(200, "text/plain; charset=utf-8", "hello from shnet");
-        }
-        return Shnet.Response.text(404, "text/plain; charset=utf-8", "Not Found");
-    }
-}
+```text
+   ____ ___ ____   ____ _   _    _  _____ 
+  / ___|_ _|  _ \ / ___| | | |  / \|_   _|
+ | |  _ | || |_) | |   | |_| | / _ \ | |  
+ | |_| || ||  _ <| |___|  _  |/ ___ \| |  
+  \____|___|_| \_\\____|_| |_/_/   \_\_|  v1.0.0
 ```
 
-**Start (ephemeral, no auto-restart)**
-```java
-Shnet.Config config = Shnet.Config.builder(
-        8723,
-        R.drawable.ic_node,
-        "node running",
-        "Tap to open"
-).build();
+**girchat** is a high-performance, dual-stack IPv6 peer mesh communicator and node runtime designed for device-owned applications. It runs anywhere with zero external dependencies: pure Java, standalone Native C, and single-file Python 3.
 
-Shnet.start(context, config, new DemoHandler());
-```
+---
 
-**Start (persistent, auto-restart)**
-```java
-public final class DemoFactory implements Shnet.HandlerFactory {
-    @Override
-    public Shnet.Handler create(Context context) {
-        return new DemoHandler();
-    }
-}
+## Key Capabilities
 
-Shnet.startPersistent(context, config, DemoFactory.class);
-```
-Note: the factory class must be public with a zero-arg constructor.
+- **🌐 Dual-Stack IPv6 Peer Mesh & Priority**: Strongly prioritizes global routable IPv6 (`2409:...`, `2000::/3`, `fc00::/7`, `fd00::/8`) followed by link-local IPv6 (`fe80::`), and dual-stack socket binding (`IPV6_V6ONLY = 0`).
+- **💬 IRChat Terminal REPL**: Rich 256-color ANSI interface with status emojis (`💬`, `👤`, `❯`, `🟢`, `🔴`, `🏷️`, `✨`, `🌐`, `📡`, `⏳`, `💨`, `👋`, `⚡`).
+- **👤 Identity Persistence & Nickname Separation**: Persistent nickname stored in `~/.shnet/identity`. If local and peer nicknames match (e.g. both named `rei`), girchat disambiguates incoming messages as `<rei#peer>` vs `You` so chat logs are always distinct.
+- **⚡ IRC Commands**: Full interactive slash commands:
+  - `/nick <name>` - Update and persist your nickname across sessions.
+  - `/me <action>` - IRC action message (`✨ * rei waves to peer`).
+  - `/whois` - Inspect identity, connection state, and latency for active peer.
+  - `/peer <url>` - Connect to target peer (supports bracketed IPv6 `[2409:...]:8723`).
+  - `/peers` - List recent mesh peers from storage history.
+  - `/history [limit]` - Inspect chat history.
+  - `/qr` - Display terminal ANSI QR code of your node URL.
+  - `/info` / `/status` - Display IPv6 and IPv4 listening addresses.
+  - `/clear` - Clear terminal screen.
+  - `/help` - Command reference.
+  - `/exit` / `/quit` - Clean disconnect and node shutdown.
+- **📱 Multi-Platform Standalone Deployments**:
+  - **Java Fat JAR**: `shnet.jar` / `girchat.jar` (1.4MB, self-contained, zero Android SDK required).
+  - **Native C Binary**: `shnet` / `girchat` (76KB, zero external dependencies, embedded QR generator).
+  - **Pure Python 3**: `shnet.py` / `girchat.py` (87KB, single-file, zero pip dependencies).
 
-**Stop**
-```java
-Shnet.stop(context);
-```
+---
 
-**Links + QR**
-```java
-List<Shnet.Link> links = Shnet.links(context, 8723, Shnet.LinkPreference.IPV6_FIRST);
-Bitmap qr = Shnet.qr(links.get(0).url, 420);
-```
+## Quick Start
 
-## HTTPS (optional)
-
-Create a keystore (BKS/PKCS12) and ship it as a raw resource or file, then:
-
-```java
-Shnet.TlsConfig tls = Shnet.TlsConfig.fromRawResource(R.raw.shnet_keystore, "password");
-Shnet.Config config = Shnet.Config.builder(
-        8723,
-        R.drawable.ic_node,
-        "node running",
-        "Tap to open"
-).setTlsConfig(tls).build();
-
-Shnet.start(context, config, new DemoHandler());
-
-List<Shnet.Link> links = Shnet.links(context, config, Shnet.LinkPreference.IPV6_FIRST);
-```
-
-## Build
+### 1. Launch Interactive Chat
 
 ```bash
-./gradlew :shnet:assembleDebug
+# Terminal 1 / Device 1 (starts Host mode on port 8723, listening on Dual-Stack IPv6 & IPv4):
+girchat
+
+# Terminal 2 / Device 2 (auto-discovers local or LAN host, meshes immediately):
+girchat --name alice
+
+# Or specify a direct target address (IPv6 or IPv4):
+girchat [2409:4055:2e3d:88c4::d5]:8723
 ```
 
-## iOS note
+### 2. Slash Commands in Chat
 
-shnet is Android-only today. An iOS port would require a separate Swift
-implementation (e.g., `NWListener`) and cannot keep a persistent background
-service. iOS nodes must be on-demand/event-driven due to OS limits.
+```irc
+[🟢 rei ❯ alice] ❯ /me smiles at the mesh
+[12:00:00] ✨ * rei smiles at the mesh
+
+[🟢 rei ❯ alice] ❯ /whois
+WHOIS Information:
+  Local Nick:   rei
+  Local Port:   8723 (Dual-Stack IPv6/IPv4)
+  Peer URL:     http://[2409:4055:2e3d:88c4::d5]:8723/
+  Peer Nick:    alice
+  Peer Status:  Online
+
+[🟢 rei ❯ alice] ❯ /nick hoan
+✨ Nickname changed from <rei> to <hoan>
+```
+
+### 3. One-Shot Send & History
+
+```bash
+# Send a message to an IPv6 or IPv4 node:
+girchat send [2409:4055:2e3d:88c4::d5]:8723 "Hello via IPv6 mesh!"
+
+# View stored chat history:
+girchat history
+```
+
+### 4. Static File Hosting
+
+```bash
+# Serve static directory over dual-stack IPv6/IPv4 with terminal QR code:
+shnet serve ./public -p 8080 --qr
+```
+
+---
+
+## Standalone Binaries & Distribution
+
+All binaries are self-contained and pre-built in `/root/workspace/download/`:
+
+| Format | File | Size | Requirements |
+|---|---|---|---|
+| **Native C Binary** | `shnet` / `girchat` | 76 KB | Linux (glibc/musl) |
+| **Java Fat JAR** | `shnet.jar` / `girchat.jar` | 1.4 MB | Java 11+ |
+| **Pure Python** | `shnet.py` / `girchat.py` | 87 KB | Python 3.8+ |
+
+---
+
+## Building from Source
+
+### Java Fat JAR & Test Suite
+```bash
+# Run test suite
+./gradlew test
+
+# Build fat JAR (cli/build/libs/shnet.jar)
+./gradlew :cli:jar
+```
+
+### Native C Binary
+```bash
+gcc -O2 -pthread c/shnet.c c/qrcodegen.c -o c/shnet
+```
+
+---
+
+## License
+
+MIT License. Designed and maintained for device-owned computing in GIR.
