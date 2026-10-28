@@ -13,3 +13,4 @@ __pycache__/
 *.pyc
 c/shnet
 *.o
+c/shnet-musl
