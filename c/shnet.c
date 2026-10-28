@@ -1117,6 +1117,7 @@ static int bind_dual_stack_server(int preferred_port, int *out_port) {
 }
 
 static void print_prompt(void) {
+    if (!isatty(STDIN_FILENO)) return;
     char dname[128];
     if (g_peer_name[0]) {
         format_peer_display_name(g_peer_name, dname, sizeof(dname));
@@ -1224,10 +1225,17 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     }
 
     char line[4096];
+    bool tty = isatty(STDIN_FILENO);
     while (g_running) {
-        print_prompt();
-
-        if (!fgets(line, sizeof(line), stdin)) break;
+        if (tty) {
+            print_prompt();
+            if (!fgets(line, sizeof(line), stdin)) break;
+        } else {
+            if (!fgets(line, sizeof(line), stdin)) {
+                sleep(1);
+                continue;
+            }
+        }
         char *nl = strchr(line, '\n');
         if (nl) *nl = '\0';
         char *cr = strchr(line, '\r');
@@ -1481,7 +1489,7 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    if (strcmp(cmd, "chat") == 0) {
+    if (strcmp(cmd, "chat") == 0 || strcmp(cmd, "listen") == 0 || strcmp(cmd, "node") == 0) {
         const char *peer = NULL;
         int port = DEFAULT_PORT;
         const char *explicit_name = NULL;
