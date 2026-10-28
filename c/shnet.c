@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <limits.h>
+#include <signal.h>
 
 #include "qrcodegen.h"
 
@@ -741,7 +742,7 @@ static void send_403(int sock) {
     safe_write(sock, resp, strlen(resp));
 }
 
-static void handle_static_file(int client_sock, const char *req_path) {
+static void handle_static_file(int client_sock, const char *req_path, bool is_head) {
     char clean_path[1024];
     strncpy(clean_path, req_path, sizeof(clean_path) - 1);
     clean_path[sizeof(clean_path) - 1] = '\0';
@@ -802,10 +803,10 @@ static void handle_static_file(int client_sock, const char *req_path) {
             char header[256];
             snprintf(header, sizeof(header),
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", strlen(html));
-            ssize_t w = write(client_sock, header, strlen(header));
-            (void)w;
-            w = write(client_sock, html, strlen(html));
-            (void)w;
+            safe_write(client_sock, header, strlen(header));
+            if (!is_head) {
+                safe_write(client_sock, html, strlen(html));
+            }
             return;
         }
     }
@@ -816,19 +817,22 @@ static void handle_static_file(int client_sock, const char *req_path) {
         return;
     }
 
-    const char *mime = get_mime_type(full_path);
+    const char *mime = get_mime_type(resolved);
     char header[512];
     snprintf(header, sizeof(header),
         "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %ld\r\nConnection: close\r\n\r\n",
         mime, (long)st.st_size);
     ssize_t w = write(client_sock, header, strlen(header));
-    (void)w;
+    if (w < 0 || is_head) {
+        fclose(f);
+        return;
+    }
 
     char chunk[8192];
     size_t bytes;
     while ((bytes = fread(chunk, 1, sizeof(chunk), f)) > 0) {
         w = write(client_sock, chunk, bytes);
-        (void)w;
+        if (w < 0) break;
     }
     fclose(f);
 }
@@ -1018,20 +1022,28 @@ static void *handle_client(void *arg) {
                  strlen(resp_body), resp_body);
         safe_write(client_sock, resp, strlen(resp));
     } else {
-        const char *p = buffer + 4;
-        const char *end = strchr(p, ' ');
+        bool is_head = (strncmp(buffer, "HEAD ", 5) == 0);
+        const char *p = strchr(buffer, ' ');
         char req_path[512] = "/";
-        if (end && (size_t)(end - p) < sizeof(req_path)) {
-            strncpy(req_path, p, end - p);
-            req_path[end - p] = '\0';
+        if (p) {
+            p++;
+            const char *end = strchr(p, ' ');
+            if (end && (size_t)(end - p) < sizeof(req_path)) {
+                strncpy(req_path, p, end - p);
+                req_path[end - p] = '\0';
+            }
         }
 
         if (strcmp(req_path, "/") == 0 && g_static_dir[0] == '\0') {
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\nhello from girchat (C)";
-            ssize_t w = write(client_sock, resp, strlen(resp));
-            (void)w;
+            if (is_head) {
+                const char *hresp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\n";
+                safe_write(client_sock, hresp, strlen(hresp));
+            } else {
+                safe_write(client_sock, resp, strlen(resp));
+            }
         } else if (g_static_dir[0] != '\0') {
-            handle_static_file(client_sock, req_path);
+            handle_static_file(client_sock, req_path, is_head);
         } else {
             send_404(client_sock);
         }
@@ -1386,6 +1398,7 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
 /* ------------------------------------------------------------------------- */
 
 int main(int argc, char *argv[]) {
+    signal(SIGPIPE, SIG_IGN);
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
         printf("girchat / shnet (Native C) - Dual-Stack IPv6 Peer Mesh & Self-Contained Node Runtime\n\n"
                "Usage:\n"
