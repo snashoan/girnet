@@ -1,12 +1,15 @@
 package io.shnet.chat;
 
 import io.shnet.Shnet;
+import io.shnet.ShnetLinks;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetAddress;
+import java.net.Inet6Address;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
@@ -54,28 +57,41 @@ public final class ChatClient {
         if (s.endsWith("/")) {
             s = s.substring(0, s.length() - 1);
         }
-        if (!s.startsWith("[") && s.contains(":")) {
+        if (s.startsWith("[") && s.contains("]")) {
+            int closeBracket = s.indexOf(']');
+            if (!s.substring(closeBracket).contains(":")) {
+                s = s + ":" + Shnet.DEFAULT_PORT;
+            }
+            return scheme + s + "/";
+        }
+        if (s.contains(":")) {
             int firstColon = s.indexOf(':');
             int lastColon = s.lastIndexOf(':');
             if (firstColon != lastColon) {
+                try {
+                    InetAddress addr = InetAddress.getByName(s);
+                    if (addr instanceof Inet6Address) {
+                        return scheme + "[" + s + "]:" + Shnet.DEFAULT_PORT + "/";
+                    }
+                } catch (Exception ignored) {
+                }
+                String hostPart = s.substring(0, lastColon);
                 String lastPart = s.substring(lastColon + 1);
-                boolean isPort = false;
-                if (!lastPart.isEmpty() && lastPart.matches("\\d+")) {
-                    try {
+                try {
+                    InetAddress addr = InetAddress.getByName(hostPart);
+                    if (addr instanceof Inet6Address && lastPart.matches("\\d+")) {
                         int p = Integer.parseInt(lastPart);
                         if (p > 0 && p <= 65535) {
-                            isPort = true;
+                            return scheme + "[" + hostPart + "]:" + p + "/";
                         }
-                    } catch (NumberFormatException ignored) {
                     }
+                } catch (Exception ignored) {
                 }
-                if (isPort) {
-                    String ipPart = s.substring(0, lastColon);
-                    s = "[" + ipPart + "]:" + lastPart;
-                } else {
-                    s = "[" + s + "]:" + Shnet.DEFAULT_PORT;
-                }
+                return scheme + "[" + s + "]:" + Shnet.DEFAULT_PORT + "/";
             }
+        }
+        if (!s.contains(":")) {
+            return scheme + s + ":" + Shnet.DEFAULT_PORT + "/";
         }
         return scheme + s + "/";
     }
@@ -173,8 +189,9 @@ public final class ChatClient {
             conn.setReadTimeout(3000);
             conn.setDoOutput(true);
 
-            String body = String.format("{\"name\":\"%s\",\"port\":%d}",
-                    ChatMessage.escapeJson(localName), localPort);
+            String primaryUrl = ShnetLinks.getPrimaryUrl(localPort);
+            String body = String.format("{\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\"}",
+                    ChatMessage.escapeJson(localName), localPort, ChatMessage.escapeJson(primaryUrl));
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             conn.setRequestProperty("Content-Length", String.valueOf(bytes.length));
 
@@ -191,7 +208,9 @@ public final class ChatClient {
                     while ((line = reader.readLine()) != null) sb.append(line);
                     String resp = sb.toString();
                     String peerName = ChatMessage.extractField(resp, "name");
-                    return new ConnectResult(true, (peerName != null && !peerName.isEmpty()) ? peerName : "host", baseUrl, null);
+                    String internetUrl = ChatMessage.extractField(resp, "internet_url");
+                    String finalPeerUrl = (internetUrl != null && !internetUrl.isEmpty()) ? internetUrl : baseUrl;
+                    return new ConnectResult(true, (peerName != null && !peerName.isEmpty()) ? peerName : "host", finalPeerUrl, null);
                 }
             } else {
                 return new ConnectResult(false, null, null, "HTTP " + code);

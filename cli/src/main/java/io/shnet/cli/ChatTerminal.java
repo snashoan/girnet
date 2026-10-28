@@ -43,26 +43,12 @@ public final class ChatTerminal {
         boolean hadExplicitPeer = (activePeer != null);
 
         if (!hadExplicitPeer) {
-            String existingHost = ChatClient.ping("http://127.0.0.1:" + localPort);
-            if (existingHost != null) {
-                activePeer = "http://127.0.0.1:" + localPort + "/";
-                isHostMode = false;
-            } else {
-                String lanHost = ChatClient.discoverHost(localPort);
-                if (lanHost != null) {
-                    activePeer = lanHost;
-                    isHostMode = false;
-                }
-            }
+            isHostMode = true;
         } else {
             isHostMode = false;
         }
 
-        if (activePeer != null && (activePeer.contains("127.0.0.1:" + localPort) || activePeer.contains("localhost:" + localPort))) {
-            localPort = findAvailablePort(localPort + 1);
-        } else {
-            localPort = findAvailablePort(localPort);
-        }
+        localPort = findAvailablePort(localPort);
 
         chatHandler = new ChatHandler(storage, localName, new ChatHandler.ChatEventListener() {
             @Override
@@ -311,8 +297,7 @@ public final class ChatTerminal {
                 break;
 
             case "/qr":
-                List<Shnet.Link> links = Shnet.links(localPort);
-                String url = links.isEmpty() ? ("http://127.0.0.1:" + localPort + "/") : links.get(0).url;
+                String url = io.shnet.ShnetLinks.getPrimaryUrl(localPort);
                 System.out.println("[QR] " + url);
                 System.out.print(Shnet.qrAnsi(url));
                 break;
@@ -366,9 +351,11 @@ public final class ChatTerminal {
     private void printWelcomeHeader() {
         System.out.println("girchat 1.0.0 [dual-stack ipv6]");
         System.out.println("node: " + localName + " | port: " + localPort);
+        String primaryUrl = io.shnet.ShnetLinks.getPrimaryUrl(localPort);
+        System.out.println("endpoint: " + primaryUrl);
         List<Shnet.Link> links = Shnet.links(localPort);
         for (Shnet.Link l : links) {
-            String badge = l.isIpv6 ? "ipv6" : "ipv4";
+            String badge = l.label != null && l.label.contains("Internet IPv6") ? "internet-v6" : (l.isIpv6 ? "local-v6" : "local-v4");
             System.out.println("link [" + badge + "]: " + l.url);
         }
         if (activePeer != null) {
@@ -395,29 +382,31 @@ public final class ChatTerminal {
 
     private void printWhois() {
         System.out.println("[WHOIS]");
-        System.out.println("  local: " + localName + " (port " + localPort + ")");
+        System.out.println("  local:    " + localName + " (port " + localPort + ")");
+        System.out.println("  endpoint: " + io.shnet.ShnetLinks.getPrimaryUrl(localPort));
         if (activePeer != null) {
-            System.out.println("  peer:  " + (peerName != null ? peerName : "unknown") + " (" + activePeer + ")");
+            System.out.println("  peer:     " + (peerName != null ? peerName : "unknown") + " (" + activePeer + ")");
             if (peerName != null && peerName.equalsIgnoreCase(localName)) {
-                System.out.println("  alias: " + peerName + "#peer");
+                System.out.println("  alias:    " + peerName + "#peer");
             }
             String pingResult = ChatClient.ping(activePeer);
-            System.out.println("  state: " + (pingResult != null ? "online" : "offline"));
+            System.out.println("  state:    " + (pingResult != null ? "online" : "offline"));
         } else {
-            System.out.println("  peer:  none");
+            System.out.println("  peer:     none");
         }
     }
 
     private void printInfo() {
         System.out.println("[STATUS]");
-        System.out.println("  node:  " + localName);
-        System.out.println("  role:  " + (isHostMode ? "host" : "client/host"));
-        System.out.println("  port:  " + localPort);
-        System.out.println("  peer:  " + (peerName != null ? (formatPeerDisplayName(peerName) + " @ " + activePeer) : (activePeer != null ? activePeer : "none")));
+        System.out.println("  node:     " + localName);
+        System.out.println("  role:     " + (isHostMode ? "host" : "client/host"));
+        System.out.println("  port:     " + localPort);
+        System.out.println("  endpoint: " + io.shnet.ShnetLinks.getPrimaryUrl(localPort));
+        System.out.println("  peer:     " + (peerName != null ? (formatPeerDisplayName(peerName) + " @ " + activePeer) : (activePeer != null ? activePeer : "none")));
         System.out.println("  links:");
         List<Shnet.Link> links = Shnet.links(localPort);
         for (Shnet.Link l : links) {
-            String badge = l.isIpv6 ? "ipv6" : "ipv4";
+            String badge = l.label != null && l.label.contains("Internet IPv6") ? "internet-v6" : (l.isIpv6 ? "local-v6" : "local-v4");
             System.out.println("    [" + badge + "] " + l.url);
         }
     }

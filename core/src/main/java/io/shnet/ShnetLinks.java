@@ -93,7 +93,8 @@ public final class ShnetLinks {
                         boolean isLinkLocal = "link".equalsIgnoreCase(scope) || host.toLowerCase().startsWith("fe80");
                         try {
                             InetAddress addr = InetAddress.getByName(host);
-                            String suffix = isLinkLocal ? "IPv6 (link-local)" : "IPv6";
+                            boolean isInternet = !isLinkLocal && isInternetIpv6(addr);
+                            String suffix = isInternet ? "Internet IPv6" : (isLinkLocal ? "Local IPv6 (link-local)" : "Local IPv6");
                             String url = scheme + "://[" + host + "]:" + port + "/";
                             String key = "v6-" + host;
                             if (seen.add(key)) {
@@ -116,6 +117,34 @@ public final class ShnetLinks {
                 || lower.startsWith("virbr") || lower.startsWith("cni");
     }
 
+    public static boolean isInternetIpv6(InetAddress address) {
+        if (!(address instanceof Inet6Address)) return false;
+        Inet6Address v6 = (Inet6Address) address;
+        if (v6.isLoopbackAddress() || v6.isLinkLocalAddress() || v6.isSiteLocalAddress()
+                || v6.isMulticastAddress() || v6.isAnyLocalAddress()) {
+            return false;
+        }
+        byte[] bytes = v6.getAddress();
+        if (bytes.length == 16) {
+            // Exclude ULA fc00::/7
+            if ((bytes[0] & 0xfe) == (byte) 0xfc) {
+                return false;
+            }
+            // Global Unicast (2000::/3)
+            return (bytes[0] & 0xe0) == 0x20;
+        }
+        return false;
+    }
+
+    public static String getPrimaryUrl(int port, boolean tls) {
+        List<Shnet.Link> links = discover(port, tls, Shnet.LinkPreference.IPV6_FIRST);
+        return links.isEmpty() ? ((tls ? "https" : "http") + "://[::1]:" + port + "/") : links.get(0).url;
+    }
+
+    public static String getPrimaryUrl(int port) {
+        return getPrimaryUrl(port, false);
+    }
+
     private static void addLink(InetAddress address, String ifaceName, int port, String scheme,
                                 List<Shnet.Link> results, Set<String> seen) {
         if (address instanceof Inet4Address) {
@@ -123,7 +152,7 @@ public final class ShnetLinks {
             String url = scheme + "://" + host + ":" + port + "/";
             String key = "v4-" + host;
             if (seen.add(key)) {
-                results.add(new Shnet.Link(labelForInterface(ifaceName, "IPv4"), url, false, ifaceName, address));
+                results.add(new Shnet.Link(labelForInterface(ifaceName, "Local IPv4"), url, false, ifaceName, address));
             }
         } else if (address instanceof Inet6Address) {
             String host = address.getHostAddress();
@@ -134,7 +163,9 @@ public final class ShnetLinks {
             String url = scheme + "://[" + host + "]:" + port + "/";
             String key = "v6-" + host;
             if (seen.add(key)) {
-                String suffix = address.isLinkLocalAddress() ? "IPv6 (link-local)" : "IPv6";
+                boolean isLinkLocal = address.isLinkLocalAddress() || host.toLowerCase().startsWith("fe80");
+                boolean isInternet = !isLinkLocal && isInternetIpv6(address);
+                String suffix = isInternet ? "Internet IPv6" : (isLinkLocal ? "Local IPv6 (link-local)" : "Local IPv6");
                 results.add(new Shnet.Link(labelForInterface(ifaceName, suffix), url, true, ifaceName, address));
             }
         }
@@ -149,12 +180,18 @@ public final class ShnetLinks {
 
     private static int rankAddress(Shnet.Link link) {
         if (link.isIpv6) {
-            if (link.address != null && link.address.isLinkLocalAddress()) {
-                return 1;
+            if (link.address != null && isInternetIpv6(link.address)) {
+                return 0; // Global Internet IPv6 first
             }
-            return 0;
+            if (link.label != null && link.label.contains("Internet IPv6")) {
+                return 0;
+            }
+            if (link.address != null && link.address.isLinkLocalAddress()) {
+                return 1; // Link-local IPv6
+            }
+            return 1;
         }
-        return 2;
+        return 2; // IPv4
     }
 
     private static List<Shnet.Link> orderLinks(List<Shnet.Link> links, Shnet.LinkPreference preference) {

@@ -99,8 +99,7 @@ static void resolve_nickname(const char *cli_name, char *out_name, size_t max_le
             if (cr) *cr = '\0';
             if (buf[0]) {
                 fclose(f);
-                strncpy(out_name, buf, max_len - 1);
-                out_name[max_len - 1] = '\0';
+                snprintf(out_name, max_len, "%.*s", (int)max_len - 1, buf);
                 return;
             }
         }
@@ -119,16 +118,14 @@ static void resolve_nickname(const char *cli_name, char *out_name, size_t max_le
             char *p = buf;
             while (*p == ' ' || *p == '\t') p++;
             if (*p) {
-                strncpy(out_name, p, max_len - 1);
-                out_name[max_len - 1] = '\0';
+                snprintf(out_name, max_len, "%.*s", (int)max_len - 1, p);
                 save_nickname(out_name);
                 return;
             }
         }
     }
 
-    strncpy(out_name, "rei", max_len - 1);
-    out_name[max_len - 1] = '\0';
+    snprintf(out_name, max_len, "rei");
     save_nickname(out_name);
 }
 
@@ -260,30 +257,95 @@ static void print_history(const char *filter_peer, int limit) {
 /* Network & Dual-Stack Helpers                                              */
 /* ------------------------------------------------------------------------- */
 
+static bool is_internet_ipv6(const struct in6_addr *addr) {
+    if (IN6_IS_ADDR_LOOPBACK(addr) || IN6_IS_ADDR_LINKLOCAL(addr) ||
+        IN6_IS_ADDR_SITELOCAL(addr) || IN6_IS_ADDR_MULTICAST(addr) ||
+        IN6_IS_ADDR_V4MAPPED(addr)) {
+        return false;
+    }
+    // Exclude Unique Local Addresses (ULA fc00::/7)
+    if ((addr->s6_addr[0] & 0xfe) == 0xfc) {
+        return false;
+    }
+    // Global Unicast (2000::/3 has top 3 bits 001)
+    return (addr->s6_addr[0] & 0xe0) == 0x20;
+}
+
+static void get_primary_url(int port, char *out_url, size_t max_len) {
+    struct ifaddrs *ifaddr, *ifa;
+    out_url[0] = '\0';
+    if (getifaddrs(&ifaddr) != -1) {
+        // Pass 1: Global internet IPv6 (outside network address)
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            if (ifa->ifa_addr->sa_family == AF_INET6) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+                if (is_internet_ipv6(&sin6->sin6_addr)) {
+                    char host[INET6_ADDRSTRLEN];
+                    inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
+                    snprintf(out_url, max_len, "http://[%s]:%d/", host, port);
+                    freeifaddrs(ifaddr);
+                    return;
+                }
+            }
+        }
+        // Pass 2: Link-local IPv6
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            if (ifa->ifa_addr->sa_family == AF_INET6) {
+                struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
+                if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+                    char host[INET6_ADDRSTRLEN];
+                    inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
+                    snprintf(out_url, max_len, "http://[%s]:%d/", host, port);
+                    freeifaddrs(ifaddr);
+                    return;
+                }
+            }
+        }
+        // Pass 3: IPv4
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            if (ifa->ifa_addr->sa_family == AF_INET) {
+                struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+                if (sin->sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
+                    char host[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host));
+                    snprintf(out_url, max_len, "http://%s:%d/", host, port);
+                    freeifaddrs(ifaddr);
+                    return;
+                }
+            }
+        }
+        freeifaddrs(ifaddr);
+    }
+    snprintf(out_url, max_len, "http://[::1]:%d/", port);
+}
+
 static void print_links(int port) {
     struct ifaddrs *ifaddr, *ifa;
     if (getifaddrs(&ifaddr) == -1) {
-        printf("    [ipv6] http://[::1]:%d/\n", port);
-        printf("    [ipv4] http://127.0.0.1:%d/\n", port);
+        printf("    [internet-v6] http://[::1]:%d/\n", port);
+        printf("    [local-v4]    http://127.0.0.1:%d/\n", port);
         return;
     }
 
     int found = 0;
-    // Pass 1: Global routable IPv6 first
+    // Pass 1: Global internet routable IPv6 first (outside network)
     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
         if (!ifa->ifa_addr) continue;
         if (ifa->ifa_addr->sa_family == AF_INET6) {
             struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ifa->ifa_addr;
-            if (!IN6_IS_ADDR_LOOPBACK(&sin6->sin6_addr) && !IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+            if (is_internet_ipv6(&sin6->sin6_addr)) {
                 char host[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
-                printf("    [ipv6] http://[%s]:%d/\n", host, port);
+                printf("    [internet-v6] http://[%s]:%d/\n", host, port);
                 found++;
             }
         }
     }
 
-    // Pass 2: Link-local IPv6
+    // Pass 2: Local link IPv6
     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
         if (!ifa->ifa_addr) continue;
         if (ifa->ifa_addr->sa_family == AF_INET6) {
@@ -291,13 +353,13 @@ static void print_links(int port) {
             if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
                 char host[INET6_ADDRSTRLEN];
                 inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host));
-                printf("    [ipv6-ll] http://[%s]:%d/\n", host, port);
+                printf("    [local-v6]    http://[%s]:%d/\n", host, port);
                 found++;
             }
         }
     }
 
-    // Pass 3: IPv4
+    // Pass 3: Local LAN IPv4
     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
         if (!ifa->ifa_addr) continue;
         if (ifa->ifa_addr->sa_family == AF_INET) {
@@ -305,7 +367,7 @@ static void print_links(int port) {
             if (sin->sin_addr.s_addr != htonl(INADDR_LOOPBACK)) {
                 char host[INET_ADDRSTRLEN];
                 inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host));
-                printf("    [ipv4] http://%s:%d/\n", host, port);
+                printf("    [local-v4]    http://%s:%d/\n", host, port);
                 found++;
             }
         }
@@ -313,8 +375,8 @@ static void print_links(int port) {
 
     freeifaddrs(ifaddr);
     if (!found) {
-        printf("    [ipv6] http://[::1]:%d/\n", port);
-        printf("    [ipv4] http://127.0.0.1:%d/\n", port);
+        printf("    [internet-v6] http://[::1]:%d/\n", port);
+        printf("    [local-v4]    http://127.0.0.1:%d/\n", port);
     }
 }
 
@@ -357,6 +419,14 @@ static void print_qr_ansi(const char *text) {
     printf("%s\n", ANSI_RESET);
 }
 
+static void format_http_host(const char *host, int port, char *dest, size_t max_len) {
+    if (strchr(host, ':') && host[0] != '[') {
+        snprintf(dest, max_len, "[%s]:%d", host, port);
+    } else {
+        snprintf(dest, max_len, "%s:%d", host, port);
+    }
+}
+
 static void parse_host_port(const char *peer, char *host, int *port) {
     const char *p = peer;
     if (strncmp(p, "http://", 7) == 0) p += 7;
@@ -383,24 +453,33 @@ static void parse_host_port(const char *peer, char *host, int *port) {
         }
     }
 
+    // Check if the entire temp string is a valid IPv6 address without brackets
+    struct in6_addr sa6;
+    if (inet_pton(AF_INET6, temp, &sa6) == 1) {
+        strncpy(host, temp, 255);
+        host[255] = '\0';
+        *port = DEFAULT_PORT;
+        return;
+    }
+
+    // Check if it has multiple colons (IPv6 with trailing port)
     char *last_c = strrchr(temp, ':');
     char *first_c = strchr(temp, ':');
     if (last_c && first_c && last_c != first_c) {
-        bool is_port = true;
-        for (char *c = last_c + 1; *c; c++) {
-            if (*c < '0' || *c > '9') { is_port = false; break; }
+        *last_c = '\0';
+        if (inet_pton(AF_INET6, temp, &sa6) == 1) {
+            int p_val = atoi(last_c + 1);
+            if (p_val > 0 && p_val <= 65535) {
+                strncpy(host, temp, 255);
+                host[255] = '\0';
+                *port = p_val;
+                return;
+            }
         }
-        if (is_port && *(last_c + 1) != '\0') {
-            *last_c = '\0';
-            *port = atoi(last_c + 1);
-            strncpy(host, temp, 255);
-            host[255] = '\0';
-        } else {
-            strncpy(host, temp, 255);
-            host[255] = '\0';
-            *port = DEFAULT_PORT;
-        }
-    } else if (last_c) {
+        *last_c = ':'; // restore
+    }
+
+    if (last_c) {
         *last_c = '\0';
         *port = atoi(last_c + 1);
         strncpy(host, temp, 255);
@@ -444,6 +523,38 @@ static int connect_to_host(const char *host, int port, int timeout_sec) {
     return sock;
 }
 
+static ssize_t read_http_response(int sock, char *buf, size_t max_len) {
+    size_t total = 0;
+    char *hdr_end = NULL;
+    while (total < max_len - 1) {
+        ssize_t n = read(sock, buf + total, max_len - 1 - total);
+        if (n <= 0) break;
+        total += n;
+        buf[total] = '\0';
+        hdr_end = strstr(buf, "\r\n\r\n");
+        if (hdr_end) break;
+    }
+    if (!hdr_end) return total;
+
+    int clen = 0;
+    char *cl = strcasestr(buf, "Content-Length:");
+    if (cl && cl < hdr_end) {
+        clen = atoi(cl + 15);
+    }
+
+    size_t body_have = total - ((hdr_end + 4) - buf);
+    while (clen > 0 && body_have < (size_t)clen && total < max_len - 1) {
+        size_t to_read = (size_t)clen - body_have;
+        if (to_read > max_len - 1 - total) to_read = max_len - 1 - total;
+        ssize_t n = read(sock, buf + total, to_read);
+        if (n <= 0) break;
+        total += n;
+        buf[total] = '\0';
+        body_have = total - ((hdr_end + 4) - buf);
+    }
+    return total;
+}
+
 static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
     char host[256] = "";
     int port = DEFAULT_PORT;
@@ -452,14 +563,17 @@ static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
     int sock = connect_to_host(host, port, 2);
     if (sock < 0) return false;
 
+    char host_hdr[300];
+    format_http_host(host, port, host_hdr, sizeof(host_hdr));
+
     char request[512];
     snprintf(request, sizeof(request),
-             "GET /api/chat/info HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: girchat-c/1.0.0\r\nConnection: close\r\n\r\n",
-             host, port);
+             "GET /api/chat/info HTTP/1.1\r\nHost: %s\r\nUser-Agent: girchat-c/1.0.0\r\nConnection: close\r\n\r\n",
+             host_hdr);
     safe_write(sock, request, strlen(request));
 
-    char response[1024];
-    ssize_t n = read(sock, response, sizeof(response) - 1);
+    char response[2048];
+    ssize_t n = read_http_response(sock, response, sizeof(response));
     close(sock);
 
     if (n > 0) {
@@ -484,22 +598,30 @@ static bool send_connect(const char *peer, const char *local_name, int local_por
     int sock = connect_to_host(host, port, 3);
     if (sock < 0) return false;
 
-    char json_body[256];
-    snprintf(json_body, sizeof(json_body), "{\"name\":\"%s\",\"port\":%d}", local_name, local_port);
+    char host_hdr[300];
+    format_http_host(host, port, host_hdr, sizeof(host_hdr));
 
-    char request[512];
+    char primary_url[128];
+    get_primary_url(local_port, primary_url, sizeof(primary_url));
+
+    char json_body[512];
+    snprintf(json_body, sizeof(json_body),
+             "{\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\"}",
+             local_name, local_port, primary_url);
+
+    char request[1024];
     snprintf(request, sizeof(request),
              "POST /api/chat/connect HTTP/1.1\r\n"
-             "Host: %s:%d\r\n"
+             "Host: %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
              "Connection: close\r\n\r\n%s",
-             host, port, strlen(json_body), json_body);
+             host_hdr, strlen(json_body), json_body);
 
     safe_write(sock, request, strlen(request));
 
-    char response[1024];
-    ssize_t n = read(sock, response, sizeof(response) - 1);
+    char response[2048];
+    ssize_t n = read_http_response(sock, response, sizeof(response));
     close(sock);
 
     if (n > 0) {
@@ -525,17 +647,20 @@ static void send_disconnect(const char *peer, const char *local_name) {
     int sock = connect_to_host(host, port, 1);
     if (sock < 0) return;
 
+    char host_hdr[300];
+    format_http_host(host, port, host_hdr, sizeof(host_hdr));
+
     char json_body[256];
     snprintf(json_body, sizeof(json_body), "{\"name\":\"%s\"}", local_name);
 
-    char request[512];
+    char request[1024];
     snprintf(request, sizeof(request),
              "POST /api/chat/disconnect HTTP/1.1\r\n"
-             "Host: %s:%d\r\n"
+             "Host: %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
              "Connection: close\r\n\r\n%s",
-             host, port, strlen(json_body), json_body);
+             host_hdr, strlen(json_body), json_body);
 
     safe_write(sock, request, strlen(request));
     char buf[256];
@@ -552,6 +677,9 @@ static bool send_http_message(const char *peer, const char *sender, const char *
     int sock = connect_to_host(host, port, 5);
     if (sock < 0) return false;
 
+    char host_hdr[300];
+    format_http_host(host, port, host_hdr, sizeof(host_hdr));
+
     char esc_text[4096];
     escape_json(text, esc_text, sizeof(esc_text));
     char json_body[5000];
@@ -564,17 +692,17 @@ static bool send_http_message(const char *peer, const char *sender, const char *
     char request[6000];
     snprintf(request, sizeof(request),
              "POST /api/chat/message HTTP/1.1\r\n"
-             "Host: %s:%d\r\n"
+             "Host: %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
              "Connection: close\r\n\r\n%s",
-             host, port, strlen(json_body), json_body);
+             host_hdr, strlen(json_body), json_body);
 
     ssize_t w = write(sock, request, strlen(request));
     (void)w;
 
-    char response[1024];
-    ssize_t n = read(sock, response, sizeof(response) - 1);
+    char response[2048];
+    ssize_t n = read_http_response(sock, response, sizeof(response));
     close(sock);
 
     if (n > 0) {
@@ -608,6 +736,11 @@ static void send_404(int sock) {
     (void)w;
 }
 
+static void send_403(int sock) {
+    const char *resp = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 13\r\nConnection: close\r\n\r\n403 Forbidden";
+    safe_write(sock, resp, strlen(resp));
+}
+
 static void handle_static_file(int client_sock, const char *req_path) {
     char clean_path[1024];
     strncpy(clean_path, req_path, sizeof(clean_path) - 1);
@@ -622,20 +755,30 @@ static void handle_static_file(int client_sock, const char *req_path) {
         snprintf(full_path, sizeof(full_path), "%s/%s", g_static_dir, clean_path);
     }
 
+    char resolved[4096];
+    if (!realpath(full_path, resolved)) {
+        send_404(client_sock);
+        return;
+    }
+    if (strncmp(resolved, g_static_dir, strlen(g_static_dir)) != 0) {
+        send_403(client_sock);
+        return;
+    }
+
     struct stat st;
-    if (stat(full_path, &st) != 0) {
+    if (stat(resolved, &st) != 0) {
         send_404(client_sock);
         return;
     }
 
     if (S_ISDIR(st.st_mode)) {
         char index_path[4200];
-        snprintf(index_path, sizeof(index_path), "%s/index.html", full_path);
+        snprintf(index_path, sizeof(index_path), "%s/index.html", resolved);
         if (stat(index_path, &st) == 0 && S_ISREG(st.st_mode)) {
-            strncpy(full_path, index_path, sizeof(full_path) - 1);
-            full_path[sizeof(full_path) - 1] = '\0';
+            strncpy(resolved, index_path, sizeof(resolved) - 1);
+            resolved[sizeof(resolved) - 1] = '\0';
         } else {
-            DIR *d = opendir(full_path);
+            DIR *d = opendir(resolved);
             if (!d) { send_404(client_sock); return; }
             char html[8192];
             int pos = snprintf(html, sizeof(html),
@@ -667,7 +810,7 @@ static void handle_static_file(int client_sock, const char *req_path) {
         }
     }
 
-    FILE *f = fopen(full_path, "rb");
+    FILE *f = fopen(resolved, "rb");
     if (!f) {
         send_404(client_sock);
         return;
@@ -718,108 +861,142 @@ static void print_prompt(void);
 
 static void *handle_client(void *arg) {
     int client_sock = (int)(intptr_t)arg;
-    char buffer[4096];
-    ssize_t n = read(client_sock, buffer, sizeof(buffer) - 1);
-    if (n <= 0) {
+    struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    char buffer[16384];
+    size_t total_read = 0;
+    char *header_end = NULL;
+
+    while (total_read < sizeof(buffer) - 1) {
+        ssize_t n = read(client_sock, buffer + total_read, sizeof(buffer) - 1 - total_read);
+        if (n <= 0) break;
+        total_read += n;
+        buffer[total_read] = '\0';
+        header_end = strstr(buffer, "\r\n\r\n");
+        if (header_end) break;
+    }
+
+    if (!header_end) {
         close(client_sock);
         return NULL;
     }
-    buffer[n] = '\0';
+
+    int content_length = 0;
+    char *cl = strcasestr(buffer, "Content-Length:");
+    if (cl && cl < header_end) {
+        content_length = atoi(cl + 15);
+    }
+
+    size_t body_offset = (header_end + 4) - buffer;
+    size_t body_have = total_read - body_offset;
+    while (content_length > 0 && body_have < (size_t)content_length && total_read < sizeof(buffer) - 1) {
+        size_t to_read = (size_t)content_length - body_have;
+        if (to_read > sizeof(buffer) - 1 - total_read) {
+            to_read = sizeof(buffer) - 1 - total_read;
+        }
+        ssize_t n = read(client_sock, buffer + total_read, to_read);
+        if (n <= 0) break;
+        total_read += n;
+        buffer[total_read] = '\0';
+        body_have = total_read - body_offset;
+    }
+
+    char *body = header_end + 4;
 
     if (strncmp(buffer, "POST /api/chat/connect", 22) == 0) {
-        char *body = strstr(buffer, "\r\n\r\n");
-        if (body) {
-            body += 4;
-            char name[128] = "anonymous";
-            char port_str[32] = "";
-            extract_json_str(body, "name", name, sizeof(name));
-            extract_json_str(body, "port", port_str, sizeof(port_str));
-            int c_port = atoi(port_str);
-            if (c_port <= 0) c_port = DEFAULT_PORT;
+        char name[128] = "anonymous";
+        char port_str[32] = "";
+        char internet_url[256] = "";
+        extract_json_str(body, "name", name, sizeof(name));
+        extract_json_str(body, "port", port_str, sizeof(port_str));
+        extract_json_str(body, "internet_url", internet_url, sizeof(internet_url));
+        int c_port = atoi(port_str);
+        if (c_port <= 0) c_port = DEFAULT_PORT;
 
+        char client_ip[128];
+        extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
+
+        if (internet_url[0] && strcmp(client_ip, "127.0.0.1") != 0 && strcmp(client_ip, "::1") != 0) {
+            strncpy(g_active_peer, internet_url, sizeof(g_active_peer) - 1);
+            g_active_peer[sizeof(g_active_peer) - 1] = '\0';
+        } else {
+            snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, c_port);
+        }
+        strncpy(g_peer_name, name, sizeof(g_peer_name) - 1);
+        g_peer_name[sizeof(g_peer_name) - 1] = '\0';
+
+        char dname[128];
+        format_peer_display_name(name, dname, sizeof(dname));
+        printf("\r\033[2K[CONNECT] %s <%s>\n", g_active_peer, dname);
+        print_prompt();
+
+        char primary_url[128];
+        get_primary_url(g_local_port, primary_url, sizeof(primary_url));
+
+        char resp_body[512];
+        snprintf(resp_body, sizeof(resp_body),
+                 "{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\"}",
+                 g_local_name, g_local_port, primary_url);
+        char resp[768];
+        snprintf(resp, sizeof(resp),
+                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                 strlen(resp_body), resp_body);
+        safe_write(client_sock, resp, strlen(resp));
+    } else if (strncmp(buffer, "POST /api/chat/disconnect", 25) == 0) {
+        char name[128] = "peer";
+        extract_json_str(body, "name", name, sizeof(name));
+        char dname[128];
+        format_peer_display_name(name, dname, sizeof(dname));
+        printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
+        if (g_is_host) {
+            g_active_peer[0] = '\0';
+            g_peer_name[0] = '\0';
+        }
+        print_prompt();
+        const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
+        safe_write(client_sock, resp, strlen(resp));
+    } else if (strncmp(buffer, "POST /api/chat/message", 22) == 0) {
+        char sender[128] = "anonymous", text[4096] = "", id[64] = "", r_port[32] = "";
+        extract_json_str(body, "sender", sender, sizeof(sender));
+        extract_json_str(body, "text", text, sizeof(text));
+        extract_json_str(body, "id", id, sizeof(id));
+        extract_json_str(body, "reply_port", r_port, sizeof(r_port));
+        if (!id[0]) snprintf(id, sizeof(id), "%lld-in", (long long)time(NULL)*1000);
+
+        int rp = atoi(r_port);
+        if (rp > 0) {
             char client_ip[128];
             extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
-
-            snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, c_port);
-            strncpy(g_peer_name, name, sizeof(g_peer_name) - 1);
-            g_peer_name[sizeof(g_peer_name) - 1] = '\0';
-
-            char dname[128];
-            format_peer_display_name(name, dname, sizeof(dname));
-            printf("\r\033[2K[CONNECT] %s <%s>\n", g_active_peer, dname);
-            print_prompt();
-
-            char resp_body[256];
-            snprintf(resp_body, sizeof(resp_body),
-                     "{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d}",
-                     g_local_name, g_local_port);
-            char resp[512];
-            snprintf(resp, sizeof(resp),
-                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
-                     strlen(resp_body), resp_body);
-            safe_write(client_sock, resp, strlen(resp));
-        }
-    } else if (strncmp(buffer, "POST /api/chat/disconnect", 25) == 0) {
-        char *body = strstr(buffer, "\r\n\r\n");
-        if (body) {
-            body += 4;
-            char name[128] = "peer";
-            extract_json_str(body, "name", name, sizeof(name));
-            char dname[128];
-            format_peer_display_name(name, dname, sizeof(dname));
-            printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
-            if (g_is_host) {
-                g_active_peer[0] = '\0';
-                g_peer_name[0] = '\0';
+            if (!g_active_peer[0]) {
+                snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, rp);
+                strncpy(g_peer_name, sender, sizeof(g_peer_name) - 1);
+                g_peer_name[sizeof(g_peer_name) - 1] = '\0';
             }
-            print_prompt();
-            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
-            safe_write(client_sock, resp, strlen(resp));
         }
-    } else if (strncmp(buffer, "POST /api/chat/message", 22) == 0) {
-        char *body = strstr(buffer, "\r\n\r\n");
-        if (body) {
-            body += 4;
-            char sender[128] = "anonymous", text[4096] = "", id[64] = "", r_port[32] = "";
-            extract_json_str(body, "sender", sender, sizeof(sender));
-            extract_json_str(body, "text", text, sizeof(text));
-            extract_json_str(body, "id", id, sizeof(id));
-            extract_json_str(body, "reply_port", r_port, sizeof(r_port));
-            if (!id[0]) snprintf(id, sizeof(id), "%lld-in", (long long)time(NULL)*1000);
 
-            int rp = atoi(r_port);
-            if (rp > 0) {
-                char client_ip[128];
-                extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
-                if (!g_active_peer[0]) {
-                    snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, rp);
-                    strncpy(g_peer_name, sender, sizeof(g_peer_name) - 1);
-                    g_peer_name[sizeof(g_peer_name) - 1] = '\0';
-                }
-            }
+        save_message(id, sender, g_active_peer[0] ? g_active_peer : "peer", text, "IN");
 
-            save_message(id, sender, g_active_peer[0] ? g_active_peer : "peer", text, "IN");
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        char dname[128];
+        format_peer_display_name(sender, dname, sizeof(dname));
 
-            time_t now = time(NULL);
-            struct tm *tm = localtime(&now);
-            char dname[128];
-            format_peer_display_name(sender, dname, sizeof(dname));
-
-            printf("\r\033[2K");
-            if (strncmp(text, "/me ", 4) == 0) {
-                printf("[ACTION] %02d:%02d:%02d * %s %s\n",
-                       tm->tm_hour, tm->tm_min, tm->tm_sec,
-                       dname, text + 4);
-            } else {
-                printf("[RECV] %02d:%02d:%02d <%s> %s\n",
-                       tm->tm_hour, tm->tm_min, tm->tm_sec,
-                       dname, text);
-            }
-            print_prompt();
-
-            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
-            safe_write(client_sock, resp, strlen(resp));
+        printf("\r\033[2K");
+        if (strncmp(text, "/me ", 4) == 0) {
+            printf("[ACTION] %02d:%02d:%02d * %s %s\n",
+                   tm->tm_hour, tm->tm_min, tm->tm_sec,
+                   dname, text + 4);
+        } else {
+            printf("[RECV] %02d:%02d:%02d <%s> %s\n",
+                   tm->tm_hour, tm->tm_min, tm->tm_sec,
+                   dname, text);
         }
+        print_prompt();
+
+        const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+        safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "GET /api/chat/info", 18) == 0) {
         char resp_body[256];
         snprintf(resp_body, sizeof(resp_body),
@@ -960,20 +1137,23 @@ static void print_chat_help(void) {
 }
 
 static void print_whois(void) {
+    char primary_url[128];
+    get_primary_url(g_local_port, primary_url, sizeof(primary_url));
     printf("[WHOIS]\n");
-    printf("  local: %s (port %d)\n", g_local_name, g_local_port);
+    printf("  local:    %s (port %d)\n", g_local_name, g_local_port);
+    printf("  endpoint: %s\n", primary_url);
     if (g_active_peer[0]) {
         char dname[128];
         format_peer_display_name(g_peer_name, dname, sizeof(dname));
-        printf("  peer:  %s (%s)\n", g_peer_name[0] ? dname : "unknown", g_active_peer);
+        printf("  peer:     %s (%s)\n", g_peer_name[0] ? dname : "unknown", g_active_peer);
         if (g_peer_name[0] && strcasecmp(g_peer_name, g_local_name) == 0) {
-            printf("  alias: %s#peer\n", g_peer_name);
+            printf("  alias:    %s#peer\n", g_peer_name);
         }
         char test_name[128];
         bool online = ping_peer(g_active_peer, test_name, sizeof(test_name));
-        printf("  state: %s\n", online ? "online" : "offline");
+        printf("  state:    %s\n", online ? "online" : "offline");
     } else {
-        printf("  peer:  none\n");
+        printf("  peer:     none\n");
     }
 }
 
@@ -981,15 +1161,10 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     resolve_nickname(cli_name, g_local_name, sizeof(g_local_name));
 
     if (initial_peer && initial_peer[0]) {
-        strncpy(g_active_peer, initial_peer, sizeof(g_active_peer) - 1);
+        snprintf(g_active_peer, sizeof(g_active_peer), "%s", initial_peer);
         g_is_host = false;
     } else {
-        if (ping_peer("127.0.0.1:8723", g_peer_name, sizeof(g_peer_name))) {
-            strncpy(g_active_peer, "127.0.0.1:8723", sizeof(g_active_peer) - 1);
-            g_is_host = false;
-        } else {
-            g_is_host = true;
-        }
+        g_is_host = true;
     }
 
     if (g_active_peer[0] && (strstr(g_active_peer, "127.0.0.1:8723") || strstr(g_active_peer, "localhost:8723"))) {
@@ -1005,8 +1180,12 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     pthread_t stid;
     pthread_create(&stid, NULL, server_thread, (void *)(intptr_t)server_sock);
 
+    char primary_url[128];
+    get_primary_url(g_local_port, primary_url, sizeof(primary_url));
+
     printf("girchat %s [dual-stack ipv6]\n", GIRCHAT_VERSION);
     printf("node: %s | port: %d\n", g_local_name, g_local_port);
+    printf("endpoint: %s\n", primary_url);
     print_links(g_local_port);
     if (g_active_peer[0]) {
         char dname[128];
@@ -1047,7 +1226,7 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
             if (strncmp(line, "/peer ", 6) == 0 || strncmp(line, "/connect ", 9) == 0) {
                 const char *tgt = (line[1] == 'p') ? line + 6 : line + 9;
                 while (*tgt == ' ') tgt++;
-                strncpy(g_active_peer, tgt, sizeof(g_active_peer) - 1);
+                snprintf(g_active_peer, sizeof(g_active_peer), "%.*s", (int)sizeof(g_active_peer) - 1, tgt);
                 if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
                     char dname[128];
                     format_peer_display_name(g_peer_name, dname, sizeof(dname));
@@ -1067,8 +1246,8 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                 while (*new_nick == ' ') new_nick++;
                 if (*new_nick) {
                     char old_name[64];
-                    strncpy(old_name, g_local_name, sizeof(old_name) - 1);
-                    strncpy(g_local_name, new_nick, sizeof(g_local_name) - 1);
+                    snprintf(old_name, sizeof(old_name), "%s", g_local_name);
+                    snprintf(g_local_name, sizeof(g_local_name), "%.*s", (int)sizeof(g_local_name) - 1, new_nick);
                     save_nickname(g_local_name);
                     if (g_active_peer[0]) {
                         send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name));
@@ -1105,24 +1284,27 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                 printf("[PEERS]\n");
                 print_history("", 50);
             } else if (strcmp(line, "/info") == 0 || strcmp(line, "/status") == 0) {
+                char cur_url[128];
+                get_primary_url(g_local_port, cur_url, sizeof(cur_url));
                 printf("[STATUS]\n");
-                printf("  node:  %s\n", g_local_name);
-                printf("  role:  %s\n", g_is_host ? "host" : "client/host");
-                printf("  port:  %d\n", g_local_port);
+                printf("  node:     %s\n", g_local_name);
+                printf("  role:     %s\n", g_is_host ? "host" : "client/host");
+                printf("  port:     %d\n", g_local_port);
+                printf("  endpoint: %s\n", cur_url);
                 if (g_peer_name[0]) {
                     char dname[128];
                     format_peer_display_name(g_peer_name, dname, sizeof(dname));
-                    printf("  peer:  %s @ %s\n", dname, g_active_peer);
+                    printf("  peer:     %s @ %s\n", dname, g_active_peer);
                 } else if (g_active_peer[0]) {
-                    printf("  peer:  %s\n", g_active_peer);
+                    printf("  peer:     %s\n", g_active_peer);
                 } else {
-                    printf("  peer:  none\n");
+                    printf("  peer:     none\n");
                 }
                 printf("  links:\n");
                 print_links(g_local_port);
             } else if (strcmp(line, "/qr") == 0) {
                 char url[128];
-                snprintf(url, sizeof(url), "http://[::1]:%d/", g_local_port);
+                get_primary_url(g_local_port, url, sizeof(url));
                 printf("[QR] %s\n", url);
                 print_qr_ansi(url);
             } else if (strcmp(line, "/clear") == 0) {
@@ -1181,7 +1363,7 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
 
     if (show_qr) {
         char url[128];
-        snprintf(url, sizeof(url), "http://[::1]:%d/", g_local_port);
+        get_primary_url(g_local_port, url, sizeof(url));
         printf("\nQR Code for: %s\n", url);
         print_qr_ansi(url);
     }
@@ -1246,7 +1428,12 @@ int main(int argc, char *argv[]) {
     }
 
     if (strcmp(cmd, "qr") == 0) {
-        const char *text = argc >= 3 ? argv[2] : "http://[::1]:8723/";
+        char text[128];
+        if (argc >= 3) {
+            snprintf(text, sizeof(text), "%s", argv[2]);
+        } else {
+            get_primary_url(DEFAULT_PORT, text, sizeof(text));
+        }
         printf("QR Code for: %s\n", text);
         print_qr_ansi(text);
         return 0;
@@ -1298,12 +1485,21 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // If invoked with a target peer directly, treat as chat
-    if (cmd[0] != '-') {
-        run_chat_repl(cmd, DEFAULT_PORT, NULL);
+    // Default: treat arguments as chat options/peer
+    {
+        const char *peer = NULL;
+        int port = DEFAULT_PORT;
+        const char *explicit_name = NULL;
+        for (int i = 1; i < argc; i++) {
+            if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
+                port = atoi(argv[++i]);
+            } else if ((strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--name") == 0) && i + 1 < argc) {
+                explicit_name = argv[++i];
+            } else if (argv[i][0] != '-' && !peer) {
+                peer = argv[i];
+            }
+        }
+        run_chat_repl(peer, port, explicit_name);
         return 0;
     }
-
-    fprintf(stderr, "Unknown command: %s. Run shnet --help\n", cmd);
-    return 1;
 }

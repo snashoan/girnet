@@ -133,9 +133,17 @@ public final class ChatHandler implements Shnet.Handler {
             if (pStr != null) clientPort = Integer.parseInt(pStr);
         } catch (NumberFormatException ignored) {}
 
+        String internetUrl = ChatMessage.extractField(body, "internet_url");
         String remoteIp = resolveRemoteIp(request);
         String hostPart = (remoteIp.contains(":") && !remoteIp.startsWith("[")) ? ("[" + remoteIp + "]") : remoteIp;
-        String peerUrl = (clientPort > 0) ? ("http://" + hostPart + ":" + clientPort + "/") : ("http://" + hostPart + "/");
+        String peerUrl;
+        if ("127.0.0.1".equals(remoteIp)) {
+            peerUrl = (clientPort > 0) ? ("http://127.0.0.1:" + clientPort + "/") : "http://127.0.0.1/";
+        } else if (internetUrl != null && !internetUrl.isEmpty()) {
+            peerUrl = internetUrl;
+        } else {
+            peerUrl = (clientPort > 0) ? ("http://" + hostPart + ":" + clientPort + "/") : ("http://" + hostPart + "/");
+        }
 
         if (listener != null) {
             try {
@@ -143,8 +151,9 @@ public final class ChatHandler implements Shnet.Handler {
             } catch (Exception ignored) {}
         }
 
-        String ackJson = String.format("{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d,\"peer\":\"%s\"}",
-                escapeJson(nodeName), localPort, escapeJson(peerUrl));
+        String primaryUrl = io.shnet.ShnetLinks.getPrimaryUrl(localPort);
+        String ackJson = String.format("{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\",\"peer\":\"%s\"}",
+                escapeJson(nodeName), localPort, escapeJson(primaryUrl), escapeJson(peerUrl));
         return Shnet.Response.json(ackJson);
     }
 
@@ -172,9 +181,10 @@ public final class ChatHandler implements Shnet.Handler {
         }
 
         String remoteIp = resolveRemoteIp(request);
+        String hostPart = (remoteIp.contains(":") && !remoteIp.startsWith("[")) ? ("[" + remoteIp + "]") : remoteIp;
         String peerHost = (parsed.replyPort > 0)
-                ? ("http://" + remoteIp + ":" + parsed.replyPort + "/")
-                : ((parsed.peer != null && !parsed.peer.isEmpty()) ? parsed.peer : remoteIp);
+                ? ("http://" + hostPart + ":" + parsed.replyPort + "/")
+                : ((parsed.peer != null && !parsed.peer.isEmpty()) ? parsed.peer : hostPart);
 
         ChatMessage inbound = new ChatMessage(
                 parsed.id,
@@ -210,6 +220,16 @@ public final class ChatHandler implements Shnet.Handler {
 
     private static String resolveRemoteIp(Shnet.Request request) {
         String remoteIp = (request.clientAddress != null) ? request.clientAddress.getHostAddress() : "127.0.0.1";
+        if (remoteIp.startsWith("/")) {
+            remoteIp = remoteIp.substring(1);
+        }
+        int zoneIdx = remoteIp.indexOf('%');
+        if (zoneIdx >= 0) {
+            remoteIp = remoteIp.substring(0, zoneIdx);
+        }
+        if (remoteIp.startsWith("::ffff:")) {
+            remoteIp = remoteIp.substring(7);
+        }
         if ("0:0:0:0:0:0:0:1".equals(remoteIp) || "::1".equals(remoteIp)) {
             remoteIp = "127.0.0.1";
         }

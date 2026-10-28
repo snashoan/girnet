@@ -1137,6 +1137,7 @@ def is_virtual_or_container(name):
 def format_peer_url(raw):
     if not raw:
         raise ValueError("Peer address cannot be empty")
+    import ipaddress
     s = raw.strip()
     scheme = "http://"
     if s.startswith("http://"):
@@ -1148,21 +1149,45 @@ def format_peer_url(raw):
     if s.endswith("/"):
         s = s[:-1]
 
-    if not s.startswith("[") and ":" in s:
-        first_colon = s.find(":")
-        last_colon = s.rfind(":")
-        if first_colon != last_colon:
-            last_part = s[last_colon+1:]
-            if last_part.isdigit() and 0 < int(last_part) <= 65535:
-                ip_part = s[:last_colon]
-                s = f"[{ip_part}]:{last_part}"
-            else:
-                s = f"[{s}]:{DEFAULT_PORT}"
+    if s.startswith("[") and "]" in s:
+        if ":" not in s[s.find("]"): ]:
+            s = f"{s}:{DEFAULT_PORT}"
+        return f"{scheme}{s}/"
+
+    # Check if pure IPv6 address without brackets
+    try:
+        ipaddress.IPv6Address(s)
+        return f"{scheme}[{s}]:{DEFAULT_PORT}/"
+    except ValueError:
+        pass
+
+    # Check if IPv6 with trailing port
+    if ":" in s and s.count(":") >= 2:
+        parts = s.rsplit(":", 1)
+        try:
+            ipaddress.IPv6Address(parts[0])
+            if parts[1].isdigit() and 0 < int(parts[1]) <= 65535:
+                return f"{scheme}[{parts[0]}]:{parts[1]}/"
+        except ValueError:
+            pass
+
+    if ":" not in s:
+        return f"{scheme}{s}:{DEFAULT_PORT}/"
+
     return f"{scheme}{s}/"
 
 # ---------------------------------------------------------------------------
 # Link Discovery & QR Rendering
 # ---------------------------------------------------------------------------
+
+def is_internet_ipv6_addr(host):
+    import ipaddress
+    try:
+        obj = ipaddress.IPv6Address(host)
+        return obj.is_global and not obj.is_private and not obj.is_link_local and not obj.is_loopback
+    except Exception:
+        return False
+
 
 def get_local_links(port, scheme="http"):
     global_v6 = []
@@ -1190,12 +1215,14 @@ def get_local_links(port, scheme="http"):
                     url = f"{scheme}://[{host}]:{port}/"
                     if url not in seen:
                         seen.add(url)
-                        lbl = f"{iface} IPv6 (link-local)" if is_ll else f"{iface} IPv6"
-                        item = {"label": lbl, "url": url, "isIpv6": True}
                         if is_ll:
-                            ll_v6.append(item)
+                            lbl = f"{iface} Local IPv6 (link-local)"
+                            ll_v6.append({"label": lbl, "url": url, "isIpv6": True, "badge": "local-v6"})
                         else:
-                            global_v6.append(item)
+                            is_inet = is_internet_ipv6_addr(host)
+                            badge = "internet-v6" if is_inet else "local-v6"
+                            lbl = f"{iface} Internet IPv6" if is_inet else f"{iface} Local IPv6"
+                            global_v6.append({"label": lbl, "url": url, "isIpv6": True, "badge": badge})
     except Exception:
         pass
 
@@ -1217,12 +1244,14 @@ def get_local_links(port, scheme="http"):
                             url = f"{scheme}://[{ipv6_norm}]:{port}/"
                             if url not in seen:
                                 seen.add(url)
-                                lbl = f"{iface} IPv6 (link-local)" if is_ll else f"{iface} IPv6"
-                                item = {"label": lbl, "url": url, "isIpv6": True}
                                 if is_ll:
-                                    ll_v6.append(item)
+                                    lbl = f"{iface} Local IPv6 (link-local)"
+                                    ll_v6.append({"label": lbl, "url": url, "isIpv6": True, "badge": "local-v6"})
                                 else:
-                                    global_v6.append(item)
+                                    is_inet = is_internet_ipv6_addr(ipv6_norm)
+                                    badge = "internet-v6" if is_inet else "local-v6"
+                                    lbl = f"{iface} Internet IPv6" if is_inet else f"{iface} Local IPv6"
+                                    global_v6.append({"label": lbl, "url": url, "isIpv6": True, "badge": badge})
                         except Exception:
                             pass
         except Exception:
@@ -1239,16 +1268,24 @@ def get_local_links(port, scheme="http"):
             url = f"{scheme}://{ip}:{port}/"
             if url not in seen:
                 seen.add(url)
-                v4.append({"label": "LAN IPv4", "url": url, "isIpv6": False})
+                v4.append({"label": "LAN IPv4", "url": url, "isIpv6": False, "badge": "local-v4"})
     except Exception:
         pass
 
     links = global_v6 + ll_v6 + v4
     if not links:
-        links.append({"label": "localhost IPv6", "url": f"{scheme}://[::1]:{port}/", "isIpv6": True})
-        links.append({"label": "localhost IPv4", "url": f"{scheme}://127.0.0.1:{port}/", "isIpv6": False})
+        links.append({"label": "localhost IPv6", "url": f"{scheme}://[::1]:{port}/", "isIpv6": True, "badge": "loopback-v6"})
+        links.append({"label": "localhost IPv4", "url": f"{scheme}://127.0.0.1:{port}/", "isIpv6": False, "badge": "loopback-v4"})
 
     return links
+
+
+def get_primary_url(port, scheme="http"):
+    links = get_local_links(port, scheme)
+    for l in links:
+        if l.get("badge") == "internet-v6":
+            return l["url"]
+    return links[0]["url"] if links else f"{scheme}://[::1]:{port}/"
 
 
 def render_qr_ansi(text):
@@ -1289,15 +1326,31 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
 
     def __init__(self, server_address, RequestHandlerClass, bind_v6=False):
+        self.bind_v6 = bind_v6
         if bind_v6:
             self.address_family = socket.AF_INET6
         super().__init__(server_address, RequestHandlerClass)
-        if bind_v6:
+
+    def server_bind(self):
+        if self.bind_v6:
             try:
-                # Enable dual-stack IPv6 & IPv4
+                # Enable dual-stack IPv6 & IPv4 before binding to wildcard ::
                 self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
             except Exception:
                 pass
+        try:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except Exception:
+            pass
+        super().server_bind()
+
+    def get_request(self):
+        sock, addr = super().get_request()
+        try:
+            sock.settimeout(10.0)
+        except Exception:
+            pass
+        return sock, addr
 
 
 def make_shnet_handler(storage, node_name="rei", message_callback=None, static_dir=None, connect_callback=None, disconnect_callback=None):
@@ -1321,21 +1374,26 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
 
         def handle_chat_connect(self):
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = min(int(self.headers.get("Content-Length", 0)), 65536)
                 body = self.rfile.read(length).decode("utf-8")
                 data = json.loads(body)
                 c_name = data.get("name", "anonymous")
                 c_port = int(data.get("port", 0))
                 client_ip = self.client_address[0]
-                if client_ip in ("::1", "0:0:0:0:0:0:0:1"):
+                if client_ip.startswith("::ffff:"):
+                    client_ip = client_ip[7:]
+                elif client_ip in ("::1", "0:0:0:0:0:0:0:1"):
                     client_ip = "127.0.0.1"
-                peer_url = f"http://{client_ip}:{c_port}/" if c_port > 0 else f"http://{client_ip}/"
+
+                host_part = f"[{client_ip}]" if (":" in client_ip and not client_ip.startswith("[")) else client_ip
+                peer_url = data.get("internet_url") or (f"http://{host_part}:{c_port}/" if c_port > 0 else f"http://{host_part}/")
                 if connect_callback:
                     connect_callback(c_name, peer_url)
                 self.send_json(200, {
                     "status": "connected",
                     "name": node_name,
                     "port": self.server.server_port,
+                    "internet_url": get_primary_url(self.server.server_port),
                     "peer": peer_url
                 })
             except Exception as e:
@@ -1343,7 +1401,7 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
 
         def handle_chat_disconnect(self):
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = min(int(self.headers.get("Content-Length", 0)), 65536)
                 body = self.rfile.read(length).decode("utf-8")
                 data = json.loads(body)
                 c_name = data.get("name", "peer")
@@ -1371,6 +1429,7 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
                     "status": "running",
                     "version": VERSION,
                     "port": self.server.server_port,
+                    "endpoint": get_primary_url(self.server.server_port),
                     "links": links
                 })
             elif path == "/_shnet/links":
@@ -1392,22 +1451,25 @@ def make_shnet_handler(storage, node_name="rei", message_callback=None, static_d
 
         def handle_chat_message(self):
             try:
-                length = int(self.headers.get("Content-Length", 0))
+                length = min(int(self.headers.get("Content-Length", 0)), 65536)
                 body = self.rfile.read(length).decode("utf-8")
                 msg = ChatMessage.from_json(body)
                 msg.direction = "IN"
                 msg.recipient = node_name
                 client_ip = self.client_address[0]
-                if client_ip in ("::1", "0:0:0:0:0:0:0:1"):
+                if client_ip.startswith("::ffff:"):
+                    client_ip = client_ip[7:]
+                elif client_ip in ("::1", "0:0:0:0:0:0:0:1"):
                     client_ip = "127.0.0.1"
 
+                host_part = f"[{client_ip}]" if (":" in client_ip and not client_ip.startswith("[")) else client_ip
                 if msg.reply_port > 0:
-                    peer_url = f"http://{client_ip}:{msg.reply_port}/"
+                    peer_url = f"http://{host_part}:{msg.reply_port}/"
                     msg.peer = peer_url
                     if connect_callback:
                         connect_callback(msg.sender, peer_url)
                 elif not msg.peer or msg.peer == "me":
-                    msg.peer = client_ip
+                    msg.peer = f"http://{host_part}/"
 
                 storage.save(msg)
                 if message_callback:
@@ -1536,7 +1598,8 @@ def ping_peer(peer_url, timeout=3.0):
 def connect_peer(peer_url, local_name, local_port, timeout=3.0):
     try:
         url = format_peer_url(peer_url) + "api/chat/connect"
-        payload = json.dumps({"name": local_name, "port": local_port}).encode("utf-8")
+        primary_url = get_primary_url(local_port)
+        payload = json.dumps({"name": local_name, "port": local_port, "internet_url": primary_url}).encode("utf-8")
         req = urllib.request.Request(
             url,
             data=payload,
@@ -1545,7 +1608,8 @@ def connect_peer(peer_url, local_name, local_port, timeout=3.0):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if 200 <= resp.status < 300:
                 data = json.loads(resp.read().decode("utf-8"))
-                return True, data.get("name", "peer"), format_peer_url(peer_url)
+                resolved_url = data.get("internet_url") or format_peer_url(peer_url)
+                return True, data.get("name", "peer"), resolved_url
     except Exception:
         pass
     return False, None, None
@@ -1622,23 +1686,11 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
     is_host = True
 
     if not active_peer:
-        # Check localhost first
-        if ping_peer(f"http://127.0.0.1:{port}"):
-            active_peer = f"http://127.0.0.1:{port}/"
-            is_host = False
-        else:
-            lan = discover_host_lan(port)
-            if lan:
-                active_peer = lan
-                is_host = False
+        is_host = True
     else:
         is_host = False
 
-    # Port allocation
-    if active_peer and (f"127.0.0.1:{port}" in active_peer or f"localhost:{port}" in active_peer):
-        listen_port = port + 1
-    else:
-        listen_port = port
+    listen_port = port
 
     def format_peer_display_name(sender):
         if not sender:
@@ -1693,12 +1745,13 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
     server_thread.start()
 
     links = get_local_links(actual_port)
-    primary_url = links[0]["url"] if links else f"http://127.0.0.1:{actual_port}/"
+    primary_url = get_primary_url(actual_port)
 
     print(f"girchat {VERSION} [dual-stack ipv6]")
     print(f"node: {name} | port: {actual_port}")
+    print(f"endpoint: {primary_url}")
     for l in links:
-        badge = "ipv6" if l["isIpv6"] else "ipv4"
+        badge = l.get("badge", "ipv6" if l["isIpv6"] else "ipv4")
         print(f"link [{badge}]: {l['url']}")
     if active_peer:
         dname = format_peer_display_name(peer_name) if peer_name else active_peer
@@ -1811,16 +1864,17 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
                             print(f"[ERROR] send failed: delivery failed to {active_peer}: {ex}")
                 elif cmd == "/whois":
                     print("[WHOIS]")
-                    print(f"  local: {name} (port {actual_port})")
+                    print(f"  local:    {name} (port {actual_port})")
+                    print(f"  endpoint: {primary_url}")
                     if active_peer:
                         dname = format_peer_display_name(peer_name) if peer_name else "unknown"
-                        print(f"  peer:  {dname} ({active_peer})")
+                        print(f"  peer:     {dname} ({active_peer})")
                         if peer_name and peer_name.lower() == name.lower():
-                            print(f"  alias: {peer_name}#peer")
+                            print(f"  alias:    {peer_name}#peer")
                         p_info = ping_peer(active_peer)
-                        print(f"  state: {'online' if p_info else 'offline'}")
+                        print(f"  state:    {'online' if p_info else 'offline'}")
                     else:
-                        print("  peer:  none")
+                        print("  peer:     none")
                 elif cmd == "/history":
                     lim = int(arg) if arg.isdigit() else 20
                     h = storage.get_history(active_peer, lim)
@@ -1854,13 +1908,14 @@ def run_chat_repl(initial_peer=None, port=DEFAULT_PORT, name=None):
                     print(render_qr_ansi(primary_url))
                 elif cmd in ("/info", "/status"):
                     print("[STATUS]")
-                    print(f"  node:  {name}")
-                    print(f"  role:  {'host' if is_host else 'client/host'}")
-                    print(f"  port:  {actual_port}")
-                    print(f"  peer:  {format_peer_display_name(peer_name) + ' @ ' + active_peer if (peer_name and active_peer) else (active_peer or 'none')}")
+                    print(f"  node:     {name}")
+                    print(f"  role:     {'host' if is_host else 'client/host'}")
+                    print(f"  port:     {actual_port}")
+                    print(f"  endpoint: {primary_url}")
+                    print(f"  peer:     {format_peer_display_name(peer_name) + ' @ ' + active_peer if (peer_name and active_peer) else (active_peer or 'none')}")
                     print("  links:")
                     for l in links:
-                        badge = "ipv6" if l["isIpv6"] else "ipv4"
+                        badge = l.get("badge", "ipv6" if l["isIpv6"] else "ipv4")
                         print(f"    [{badge}] {l['url']}")
                 elif cmd == "/clear":
                     sys.stdout.write("\033[H\033[2J")
@@ -2012,10 +2067,7 @@ def main():
             print(f"  {tag:<7} {l['label']+':':<20} {l['url']}")
 
     elif args.command == "qr":
-        text = args.text
-        if not text:
-            links = get_local_links(DEFAULT_PORT)
-            text = links[0]["url"]
+        text = args.text or get_primary_url(DEFAULT_PORT)
         print(f"QR Code for: {text}")
         print(render_qr_ansi(text))
 
@@ -2023,8 +2075,7 @@ def main():
         target_dir = os.path.abspath(args.dir)
         storage = ChatStorage()
         server, actual_port = start_server_on_open_port(storage, args.port, static_dir=target_dir)
-        links = get_local_links(actual_port)
-        primary = links[0]["url"]
+        primary = get_primary_url(actual_port)
         print(f"Serving {target_dir} on {primary}")
         if args.qr:
             print(render_qr_ansi(primary))
