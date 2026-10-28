@@ -22,6 +22,9 @@
 #include <netdb.h>
 #include <limits.h>
 #include <signal.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <ctype.h>
 
 #include "qrcodegen.h"
 
@@ -51,11 +54,36 @@ static bool g_is_host = true;
 static char g_static_dir[2048] = "";
 static int g_local_port = DEFAULT_PORT;
 static volatile bool g_running = true;
+#define MAX_PEERS 64
+
+typedef struct {
+    char url[256];
+    char name[128];
+    time_t last_seen;
+    bool online;
+} PeerNode;
+
+static PeerNode g_peers[MAX_PEERS];
+static int g_peer_count = 0;
+static int g_active_peer_idx = -1;
+
 static pthread_mutex_t g_storage_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_peer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline void safe_write(int fd, const void *buf, size_t count) {
     if (write(fd, buf, count) < 0) { /* ignored */ }
+}
+
+static inline void safe_strncpy(char *dest, const char *src, size_t size) {
+    if (!dest || size == 0) return;
+    if (!src) {
+        dest[0] = '\0';
+        return;
+    }
+    size_t len = strlen(src);
+    if (len >= size) len = size - 1;
+    memcpy(dest, src, len);
+    dest[len] = '\0';
 }
 
 /* ------------------------------------------------------------------------- */
@@ -722,6 +750,316 @@ static bool send_http_message(const char *peer, const char *sender, const char *
     return false;
 }
 
+static void normalize_peer_url(const char *in_url, char *out_url, size_t max_len) {
+    if (!in_url || !out_url || max_len == 0) return;
+    const char *p = in_url;
+    while (*p == ' ' || *p == '\t') p++;
+
+    char temp[256];
+    if (strncmp(p, "http://", 7) != 0 && strncmp(p, "https://", 8) != 0) {
+        snprintf(temp, sizeof(temp), "http://%s", p);
+    } else {
+        strncpy(temp, p, sizeof(temp) - 1);
+        temp[sizeof(temp) - 1] = '\0';
+    }
+    size_t len = strlen(temp);
+    while (len > 0 && temp[len - 1] == '/') {
+        temp[--len] = '\0';
+    }
+    strncpy(out_url, temp, max_len - 1);
+    out_url[max_len - 1] = '\0';
+}
+
+static int parse_peer_index(const char *str) {
+    if (!str) return -1;
+    while (*str == ' ') str++;
+    if (*str == '#' || *str == '[') str++;
+    if (!isdigit((unsigned char)*str)) return -1;
+    char *end = NULL;
+    long val = strtol(str, &end, 10);
+    while (*end == ' ' || *end == ']') end++;
+    if (*end != '\0') return -1;
+    return (int)(val - 1);
+}
+
+static int peer_find_locked(const char *target) {
+    if (!target || !target[0]) return -1;
+
+    int num_idx = parse_peer_index(target);
+    if (num_idx >= 0) {
+        if (num_idx < g_peer_count) return num_idx;
+        return -2; // index out of range
+    }
+
+    char norm[256];
+    normalize_peer_url(target, norm, sizeof(norm));
+
+    for (int i = 0; i < g_peer_count; i++) {
+        if (strcasecmp(g_peers[i].url, norm) == 0) return i;
+    }
+    for (int i = 0; i < g_peer_count; i++) {
+        if (strcasecmp(g_peers[i].name, target) == 0) return i;
+    }
+    return -1;
+}
+
+static int peer_upsert_locked(const char *url, const char *name, bool set_active_if_none) {
+    if (!url || !url[0]) return -1;
+    char norm[256];
+    normalize_peer_url(url, norm, sizeof(norm));
+
+    int idx = -1;
+    for (int i = 0; i < g_peer_count; i++) {
+        if (strcasecmp(g_peers[i].url, norm) == 0) {
+            idx = i;
+            break;
+        }
+    }
+
+    if (idx < 0) {
+        if (g_peer_count < MAX_PEERS) {
+            idx = g_peer_count++;
+        } else {
+            idx = 0;
+            time_t oldest = g_peers[0].last_seen;
+            for (int i = 1; i < g_peer_count; i++) {
+                if (!g_peers[i].online && g_peers[i].last_seen < oldest) {
+                    oldest = g_peers[i].last_seen;
+                    idx = i;
+                }
+            }
+        }
+        safe_strncpy(g_peers[idx].url, norm, sizeof(g_peers[idx].url));
+        if (name && name[0] && strcmp(name, "peer") != 0 && strcmp(name, "anonymous") != 0) {
+            safe_strncpy(g_peers[idx].name, name, sizeof(g_peers[idx].name));
+        } else {
+            safe_strncpy(g_peers[idx].name, "peer", sizeof(g_peers[idx].name));
+        }
+    } else {
+        if (name && name[0] && strcmp(name, "peer") != 0 && strcmp(name, "anonymous") != 0) {
+            safe_strncpy(g_peers[idx].name, name, sizeof(g_peers[idx].name));
+        }
+    }
+
+    g_peers[idx].last_seen = time(NULL);
+    g_peers[idx].online = true;
+
+    // Never clobber an already active conversation! Only set active if no active peer exists.
+    if ((g_active_peer_idx < 0 || !g_active_peer[0]) && set_active_if_none) {
+        g_active_peer_idx = idx;
+        safe_strncpy(g_active_peer, g_peers[idx].url, sizeof(g_active_peer));
+        safe_strncpy(g_peer_name, g_peers[idx].name, sizeof(g_peer_name));
+    }
+
+    return idx;
+}
+
+static bool peer_switch_locked(int idx) {
+    if (idx < 0 || idx >= g_peer_count) return false;
+    g_active_peer_idx = idx;
+    safe_strncpy(g_active_peer, g_peers[idx].url, sizeof(g_active_peer));
+    safe_strncpy(g_peer_name, g_peers[idx].name, sizeof(g_peer_name));
+    return true;
+}
+
+static bool peer_replace_locked(int old_idx, const char *new_url, const char *new_name) {
+    if (old_idx < 0 || old_idx >= g_peer_count) return false;
+    char norm[256];
+    normalize_peer_url(new_url, norm, sizeof(norm));
+    safe_strncpy(g_peers[old_idx].url, norm, sizeof(g_peers[old_idx].url));
+    if (new_name && new_name[0]) {
+        safe_strncpy(g_peers[old_idx].name, new_name, sizeof(g_peers[old_idx].name));
+    } else {
+        safe_strncpy(g_peers[old_idx].name, "peer", sizeof(g_peers[old_idx].name));
+    }
+    g_peers[old_idx].last_seen = time(NULL);
+    g_peers[old_idx].online = true;
+
+    if (g_active_peer_idx == old_idx) {
+        safe_strncpy(g_active_peer, g_peers[old_idx].url, sizeof(g_active_peer));
+        safe_strncpy(g_peer_name, g_peers[old_idx].name, sizeof(g_peer_name));
+    }
+    return true;
+}
+
+static void print_peers_table(void) {
+    pthread_mutex_lock(&g_peer_mutex);
+    printf("[PEERS] (%d registered)\n", g_peer_count);
+    if (g_peer_count == 0) {
+        printf("  No peers connected yet. Use /scan to discover or /peer <url> to connect.\n");
+        pthread_mutex_unlock(&g_peer_mutex);
+        return;
+    }
+
+    printf("  #   STATUS    NAME             ENDPOINT\n");
+    for (int i = 0; i < g_peer_count; i++) {
+        char marker = (i == g_active_peer_idx) ? '*' : ' ';
+        const char *active_tag = (i == g_active_peer_idx) ? " (ACTIVE)" : "";
+        const char *status_str = g_peers[i].online ? "online" : "offline";
+        char dname[128];
+        format_peer_display_name(g_peers[i].name, dname, sizeof(dname));
+
+        printf("%c [%d] [%-7s] %-16s %s%s\n",
+               marker, i + 1, status_str, dname, g_peers[i].url, active_tag);
+    }
+    pthread_mutex_unlock(&g_peer_mutex);
+    printf("\nCommands: /peer <#> (switch), /scan (discover), /replace <#> <url>, /all <msg>\n");
+}
+
+static void load_history_peers(void) {
+    char path[512];
+    get_history_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char line[8192];
+    pthread_mutex_lock(&g_peer_mutex);
+    while (fgets(line, sizeof(line), f)) {
+        char sender[128] = "", peer[256] = "", dir[16] = "";
+        extract_json_str(line, "sender", sender, sizeof(sender));
+        extract_json_str(line, "peer", peer, sizeof(peer));
+        extract_json_str(line, "direction", dir, sizeof(dir));
+
+        if (peer[0] && strcmp(peer, "peer") != 0 && (strncmp(peer, "http://", 7) == 0 || strncmp(peer, "https://", 8) == 0 || strchr(peer, ':'))) {
+            const char *name = (strcmp(dir, "IN") == 0 && sender[0]) ? sender : "peer";
+            int idx = peer_upsert_locked(peer, name, false);
+            g_peers[idx].online = false;
+        }
+    }
+    pthread_mutex_unlock(&g_peer_mutex);
+    fclose(f);
+}
+
+static int scan_network(int target_port) {
+    if (target_port <= 0) target_port = DEFAULT_PORT;
+    printf("[SCAN] Probing localhost and local network on port %d...\n", target_port);
+
+    int found = 0;
+
+    // 1. Scan localhost ports 8720 to 8730
+    for (int p = 8720; p <= 8730; p++) {
+        if (p == g_local_port) continue;
+        char test_url[64];
+        snprintf(test_url, sizeof(test_url), "http://127.0.0.1:%d", p);
+        char node_name[128] = "";
+        if (ping_peer(test_url, node_name, sizeof(node_name))) {
+            pthread_mutex_lock(&g_peer_mutex);
+            int idx = peer_upsert_locked(test_url, node_name, false);
+            pthread_mutex_unlock(&g_peer_mutex);
+            printf("    [FOUND] [%d] %-14s %s\n", idx + 1, node_name[0] ? node_name : "node", test_url);
+            found++;
+        }
+    }
+
+    // 2. Scan local IPv4 subnets
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == 0) {
+        for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+            struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
+            if (sin->sin_addr.s_addr == htonl(INADDR_LOOPBACK)) continue;
+
+            struct sockaddr_in *sin_mask = (struct sockaddr_in *)ifa->ifa_netmask;
+            uint32_t mask = sin_mask ? sin_mask->sin_addr.s_addr : htonl(0xFFFFFF00);
+            uint32_t my_ip = sin->sin_addr.s_addr;
+            uint32_t net = my_ip & mask;
+
+            struct pollfd fds[256];
+            int sock_map[256];
+            char ip_map[256][INET_ADDRSTRLEN];
+            int n_targets = 0;
+
+            for (int host = 1; host <= 254; host++) {
+                uint32_t target_ip = (net & htonl(0xFFFFFF00)) | htonl(host);
+                if (target_ip == my_ip) continue;
+
+                int s = socket(AF_INET, SOCK_STREAM, 0);
+                if (s < 0) continue;
+
+                int flags = fcntl(s, F_GETFL, 0);
+                fcntl(s, F_SETFL, flags | O_NONBLOCK);
+
+                struct sockaddr_in saddr;
+                memset(&saddr, 0, sizeof(saddr));
+                saddr.sin_family = AF_INET;
+                saddr.sin_addr.s_addr = target_ip;
+                saddr.sin_port = htons(target_port);
+
+                connect(s, (struct sockaddr *)&saddr, sizeof(saddr));
+
+                fds[n_targets].fd = s;
+                fds[n_targets].events = POLLOUT;
+                fds[n_targets].revents = 0;
+                sock_map[n_targets] = s;
+                inet_ntop(AF_INET, &saddr.sin_addr, ip_map[n_targets], INET_ADDRSTRLEN);
+                n_targets++;
+            }
+
+            int ready = poll(fds, n_targets, 1000);
+            if (ready > 0) {
+                for (int i = 0; i < n_targets; i++) {
+                    if (fds[i].revents & POLLOUT) {
+                        int err = 0;
+                        socklen_t elen = sizeof(err);
+                        if (getsockopt(fds[i].fd, SOL_SOCKET, SO_ERROR, &err, &elen) == 0 && err == 0) {
+                            char test_url[256];
+                            snprintf(test_url, sizeof(test_url), "http://%.64s:%d", ip_map[i], target_port);
+                            char node_name[128] = "";
+                            ping_peer(test_url, node_name, sizeof(node_name));
+                            pthread_mutex_lock(&g_peer_mutex);
+                            int idx = peer_upsert_locked(test_url, node_name, false);
+                            pthread_mutex_unlock(&g_peer_mutex);
+                            printf("    [FOUND] [%d] %-14s %s\n", idx + 1, node_name[0] ? node_name : "node", test_url);
+                            found++;
+                        }
+                    }
+                }
+            }
+            for (int i = 0; i < n_targets; i++) {
+                close(sock_map[i]);
+            }
+        }
+        freeifaddrs(ifaddr);
+    }
+
+    printf("[SCAN] Finished. %d node(s) discovered.\n", found);
+    return found;
+}
+
+static void send_broadcast(const char *message) {
+    if (!message || !message[0]) return;
+    int total = 0;
+    char urls[MAX_PEERS][256];
+    char names[MAX_PEERS][128];
+    pthread_mutex_lock(&g_peer_mutex);
+    for (int i = 0; i < g_peer_count; i++) {
+        if (g_peers[i].online) {
+            safe_strncpy(urls[total], g_peers[i].url, sizeof(urls[total]));
+            safe_strncpy(names[total], g_peers[i].name, sizeof(names[total]));
+            total++;
+        }
+    }
+    pthread_mutex_unlock(&g_peer_mutex);
+
+    if (total == 0) {
+        printf("[BROADCAST] No online peers found. Use /scan or /peer <url> to connect.\n");
+        return;
+    }
+
+    int sent = 0;
+    for (int i = 0; i < total; i++) {
+        if (send_http_message(urls[i], g_local_name, message, g_local_port)) {
+            sent++;
+        }
+    }
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&now, &tm_buf);
+    printf("[BROADCAST] %02d:%02d:%02d <%s> %s (delivered to %d/%d peers)\n",
+           tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0, tm ? tm->tm_sec : 0,
+           g_local_name, message, sent, total);
+}
+
 static const char *get_mime_type(const char *path) {
     const char *dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
@@ -955,23 +1293,27 @@ static void *handle_client(void *arg) {
         char client_ip[128] = "";
         extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
 
-        pthread_mutex_lock(&g_peer_mutex);
+        char peer_url[256];
         if (internet_url[0] && strcmp(client_ip, "127.0.0.1") != 0 && strcmp(client_ip, "::1") != 0) {
-            strncpy(g_active_peer, internet_url, sizeof(g_active_peer) - 1);
-            g_active_peer[sizeof(g_active_peer) - 1] = '\0';
+            strncpy(peer_url, internet_url, sizeof(peer_url) - 1);
+            peer_url[sizeof(peer_url) - 1] = '\0';
         } else {
-            snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, c_port);
+            if (client_ip[0] == '[') {
+                snprintf(peer_url, sizeof(peer_url), "http://%s:%d", client_ip, c_port);
+            } else if (strchr(client_ip, ':')) {
+                snprintf(peer_url, sizeof(peer_url), "http://[%s]:%d", client_ip, c_port);
+            } else {
+                snprintf(peer_url, sizeof(peer_url), "http://%s:%d", client_ip, c_port);
+            }
         }
-        strncpy(g_peer_name, name, sizeof(g_peer_name) - 1);
-        g_peer_name[sizeof(g_peer_name) - 1] = '\0';
-        char active_copy[256];
-        strncpy(active_copy, g_active_peer, sizeof(active_copy) - 1);
-        active_copy[sizeof(active_copy) - 1] = '\0';
+
+        pthread_mutex_lock(&g_peer_mutex);
+        int p_idx = peer_upsert_locked(peer_url, name, true);
         pthread_mutex_unlock(&g_peer_mutex);
 
         char dname[128];
         format_peer_display_name(name, dname, sizeof(dname));
-        printf("\r\033[2K[CONNECT] %s <%s>\n", active_copy, dname);
+        printf("\r\033[2K[CONNECT] [%d] %s <%s>\n", p_idx + 1, peer_url, dname);
         print_prompt();
 
         char primary_url[128];
@@ -991,13 +1333,15 @@ static void *handle_client(void *arg) {
         extract_json_str(body, "name", name, sizeof(name));
         char dname[128];
         format_peer_display_name(name, dname, sizeof(dname));
-        printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
-        if (g_is_host) {
-            pthread_mutex_lock(&g_peer_mutex);
-            g_active_peer[0] = '\0';
-            g_peer_name[0] = '\0';
-            pthread_mutex_unlock(&g_peer_mutex);
+
+        pthread_mutex_lock(&g_peer_mutex);
+        int d_idx = peer_find_locked(name);
+        if (d_idx >= 0) {
+            g_peers[d_idx].online = false;
         }
+        pthread_mutex_unlock(&g_peer_mutex);
+
+        printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
         print_prompt();
         const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
         safe_write(client_sock, resp, strlen(resp));
@@ -1010,25 +1354,27 @@ static void *handle_client(void *arg) {
         if (!id[0]) snprintf(id, sizeof(id), "%lld-in", (long long)time(NULL)*1000);
 
         int rp = atoi(r_port);
-        if (rp > 0) {
-            char client_ip[128] = "";
-            extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
-            pthread_mutex_lock(&g_peer_mutex);
-            if (!g_active_peer[0]) {
-                snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, rp);
-                strncpy(g_peer_name, sender, sizeof(g_peer_name) - 1);
-                g_peer_name[sizeof(g_peer_name) - 1] = '\0';
-            }
-            pthread_mutex_unlock(&g_peer_mutex);
+        if (rp <= 0) rp = DEFAULT_PORT;
+        char client_ip[128] = "";
+        extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
+
+        char sender_url[256];
+        if (client_ip[0] == '[') {
+            snprintf(sender_url, sizeof(sender_url), "http://%s:%d", client_ip, rp);
+        } else if (strchr(client_ip, ':')) {
+            snprintf(sender_url, sizeof(sender_url), "http://[%s]:%d", client_ip, rp);
+        } else {
+            snprintf(sender_url, sizeof(sender_url), "http://%s:%d", client_ip, rp);
         }
 
-        char peer_copy[256];
         pthread_mutex_lock(&g_peer_mutex);
-        strncpy(peer_copy, g_active_peer[0] ? g_active_peer : "peer", sizeof(peer_copy) - 1);
-        peer_copy[sizeof(peer_copy) - 1] = '\0';
+        peer_upsert_locked(sender_url, sender, false);
+        char current_active[256];
+        strncpy(current_active, g_active_peer[0] ? g_active_peer : sender_url, sizeof(current_active) - 1);
+        current_active[sizeof(current_active) - 1] = '\0';
         pthread_mutex_unlock(&g_peer_mutex);
 
-        save_message(id, sender, peer_copy, text, "IN");
+        save_message(id, sender, sender_url, text, "IN");
 
         time_t now = time(NULL);
         struct tm tm_buf;
@@ -1174,20 +1520,30 @@ static int bind_dual_stack_server(int preferred_port, int *out_port) {
 
 static void print_prompt(void) {
     if (!isatty(STDIN_FILENO)) return;
-    char dname[128];
-    char pname[128] = "";
+    char dname[128] = "";
     char apeer[256] = "";
 
     pthread_mutex_lock(&g_peer_mutex);
-    strncpy(pname, g_peer_name, sizeof(pname) - 1);
-    pname[sizeof(pname) - 1] = '\0';
-    strncpy(apeer, g_active_peer, sizeof(apeer) - 1);
-    apeer[sizeof(apeer) - 1] = '\0';
+    if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
+        strncpy(dname, g_peers[g_active_peer_idx].name, sizeof(dname) - 1);
+        dname[sizeof(dname) - 1] = '\0';
+        strncpy(apeer, g_peers[g_active_peer_idx].url, sizeof(apeer) - 1);
+        apeer[sizeof(apeer) - 1] = '\0';
+    } else if (g_peer_name[0]) {
+        strncpy(dname, g_peer_name, sizeof(dname) - 1);
+        dname[sizeof(dname) - 1] = '\0';
+        strncpy(apeer, g_active_peer, sizeof(apeer) - 1);
+        apeer[sizeof(apeer) - 1] = '\0';
+    } else if (g_active_peer[0]) {
+        strncpy(apeer, g_active_peer, sizeof(apeer) - 1);
+        apeer[sizeof(apeer) - 1] = '\0';
+    }
     pthread_mutex_unlock(&g_peer_mutex);
 
-    if (pname[0]) {
-        format_peer_display_name(pname, dname, sizeof(dname));
-        printf("%s[%s]> ", g_local_name, dname);
+    if (dname[0]) {
+        char fmt_name[128];
+        format_peer_display_name(dname, fmt_name, sizeof(fmt_name));
+        printf("%s[%s]> ", g_local_name, fmt_name);
     } else if (apeer[0]) {
         printf("%s[%s]> ", g_local_name, apeer);
     } else {
@@ -1202,17 +1558,22 @@ static void print_prompt(void) {
 
 static void print_chat_help(void) {
     printf("commands:\n");
-    printf("  /nick <name>     set persistent nickname\n");
-    printf("  /me <action>     send action message\n");
-    printf("  /whois           show peer connection info\n");
-    printf("  /peer <url>      connect to target node\n");
-    printf("  /history [n]     show last [n] messages\n");
-    printf("  /peers           list known peers\n");
-    printf("  /info, /status   show node status & links\n");
-    printf("  /qr              show terminal QR code\n");
-    printf("  /clear           clear screen\n");
-    printf("  /help            show command help\n");
-    printf("  /exit, /quit     disconnect and exit\n");
+    printf("  /peers                list all connected and discovered peers\n");
+    printf("  /peer <#|name|url>    switch active peer or connect to new URL\n");
+    printf("  /switch <#|name>      alias for /peer\n");
+    printf("  /scan [port]          scan local subnet and localhost for nodes\n");
+    printf("  /replace <#> <url>    replace a peer slot with a new address\n");
+    printf("  /all <message>        broadcast message to all online peers\n");
+    printf("  /disconnect [target]  disconnect peer without affecting others\n");
+    printf("  /nick <name>          set persistent nickname\n");
+    printf("  /me <action>          send action message\n");
+    printf("  /whois                show active peer and connection info\n");
+    printf("  /history [n]          show last [n] messages\n");
+    printf("  /info, /status        show node status & links\n");
+    printf("  /qr                   show terminal QR code\n");
+    printf("  /clear                clear screen\n");
+    printf("  /help                 show command help\n");
+    printf("  /exit, /quit          disconnect and exit\n");
 }
 
 static void print_whois(void) {
@@ -1221,26 +1582,34 @@ static void print_whois(void) {
     printf("[WHOIS]\n");
     printf("  local:    %s (port %d)\n", g_local_name, g_local_port);
     printf("  endpoint: %s\n", primary_url);
-    if (g_active_peer[0]) {
+
+    pthread_mutex_lock(&g_peer_mutex);
+    if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
         char dname[128];
-        format_peer_display_name(g_peer_name, dname, sizeof(dname));
-        printf("  peer:     %s (%s)\n", g_peer_name[0] ? dname : "unknown", g_active_peer);
-        if (g_peer_name[0] && strcasecmp(g_peer_name, g_local_name) == 0) {
-            printf("  alias:    %s#peer\n", g_peer_name);
-        }
-        char test_name[128];
-        bool online = ping_peer(g_active_peer, test_name, sizeof(test_name));
-        printf("  state:    %s\n", online ? "online" : "offline");
+        format_peer_display_name(g_peers[g_active_peer_idx].name, dname, sizeof(dname));
+        printf("  active:   [%d] %s (%s) - %s\n",
+               g_active_peer_idx + 1, dname,
+               g_peers[g_active_peer_idx].url,
+               g_peers[g_active_peer_idx].online ? "online" : "offline");
+    } else if (g_active_peer[0]) {
+        printf("  active:   %s\n", g_active_peer);
     } else {
-        printf("  peer:     none\n");
+        printf("  active:   none\n");
     }
+    printf("  peers:    %d registered (use /peers to list)\n", g_peer_count);
+    pthread_mutex_unlock(&g_peer_mutex);
 }
 
 static void run_chat_repl(const char *initial_peer, int preferred_port, const char *cli_name) {
     resolve_nickname(cli_name, g_local_name, sizeof(g_local_name));
 
+    load_history_peers();
+
     if (initial_peer && initial_peer[0]) {
-        snprintf(g_active_peer, sizeof(g_active_peer), "%s", initial_peer);
+        pthread_mutex_lock(&g_peer_mutex);
+        int idx = peer_upsert_locked(initial_peer, NULL, true);
+        peer_switch_locked(idx);
+        pthread_mutex_unlock(&g_peer_mutex);
         g_is_host = false;
     } else {
         g_is_host = true;
@@ -1270,21 +1639,39 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     printf("node: %s | port: %d\n", g_local_name, g_local_port);
     printf("endpoint: %s\n", primary_url);
     print_links(g_local_port);
-    if (g_active_peer[0]) {
+
+    pthread_mutex_lock(&g_peer_mutex);
+    if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
         char dname[128];
-        format_peer_display_name(g_peer_name, dname, sizeof(dname));
-        printf("peer: %s @ %s\n", dname, g_active_peer);
+        format_peer_display_name(g_peers[g_active_peer_idx].name, dname, sizeof(dname));
+        printf("peer: [%d] %s @ %s\n", g_active_peer_idx + 1, dname, g_peers[g_active_peer_idx].url);
+    } else if (g_active_peer[0]) {
+        printf("peer: %s\n", g_active_peer);
     } else {
-        printf("state: listening\n");
+        printf("state: listening (use /scan to discover peers)\n");
     }
-    printf("commands: /nick /me /whois /peer /peers /history /qr /exit\n\n");
+    pthread_mutex_unlock(&g_peer_mutex);
+
+    printf("commands: /peers /peer /scan /all /replace /disconnect /whois /history /qr /exit\n\n");
 
     if (g_active_peer[0]) {
         if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
+            pthread_mutex_lock(&g_peer_mutex);
+            if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
+                safe_strncpy(g_peers[g_active_peer_idx].name, g_peer_name, sizeof(g_peers[g_active_peer_idx].name));
+                g_peers[g_active_peer_idx].online = true;
+            }
+            pthread_mutex_unlock(&g_peer_mutex);
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
             printf("[CONNECT] %s <%s>\n", g_active_peer, dname);
         } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name))) {
+            pthread_mutex_lock(&g_peer_mutex);
+            if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
+                safe_strncpy(g_peers[g_active_peer_idx].name, g_peer_name, sizeof(g_peers[g_active_peer_idx].name));
+                g_peers[g_active_peer_idx].online = true;
+            }
+            pthread_mutex_unlock(&g_peer_mutex);
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
             printf("[ONLINE] %s <%s>\n", g_active_peer, dname);
@@ -1299,13 +1686,8 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     while (g_running) {
         if (tty) {
             print_prompt();
-            if (!fgets(line, sizeof(line), stdin)) break;
-        } else {
-            if (!fgets(line, sizeof(line), stdin)) {
-                sleep(1);
-                continue;
-            }
         }
+        if (!fgets(line, sizeof(line), stdin)) break;
         char *nl = strchr(line, '\n');
         if (nl) *nl = '\0';
         char *cr = strchr(line, '\r');
@@ -1313,66 +1695,145 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
         if (!line[0]) continue;
 
         if (line[0] == '/') {
-            if (strncmp(line, "/peer ", 6) == 0 || strncmp(line, "/connect ", 9) == 0) {
-                const char *tgt = (line[1] == 'p') ? line + 6 : line + 9;
+            if (strncmp(line, "/peer ", 6) == 0 || strncmp(line, "/connect ", 9) == 0 || strncmp(line, "/switch ", 8) == 0) {
+                const char *tgt = (line[1] == 'p') ? line + 6 : ((line[1] == 'c') ? line + 9 : line + 8);
                 while (*tgt == ' ') tgt++;
-                snprintf(g_active_peer, sizeof(g_active_peer), "%.*s", (int)sizeof(g_active_peer) - 1, tgt);
-                if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
+                if (!*tgt) {
+                    print_peers_table();
+                    continue;
+                }
+
+                pthread_mutex_lock(&g_peer_mutex);
+                int idx = peer_find_locked(tgt);
+                if (idx == -2) {
+                    int total = g_peer_count;
+                    pthread_mutex_unlock(&g_peer_mutex);
+                    printf("[ERROR] Peer index out of range (1-%d registered)\n", total);
+                    continue;
+                }
+                if (idx >= 0) {
+                    peer_switch_locked(idx);
+                    char sel_url[256], sel_name[128];
+                    safe_strncpy(sel_url, g_peers[idx].url, sizeof(sel_url));
+                    safe_strncpy(sel_name, g_peers[idx].name, sizeof(sel_name));
+                    pthread_mutex_unlock(&g_peer_mutex);
+
                     char dname[128];
-                    format_peer_display_name(g_peer_name, dname, sizeof(dname));
-                    printf("[CONNECT] %s <%s>\n", g_active_peer, dname);
-                } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name))) {
-                    char dname[128];
-                    format_peer_display_name(g_peer_name, dname, sizeof(dname));
-                    printf("[ONLINE] %s <%s>\n", g_active_peer, dname);
+                    format_peer_display_name(sel_name, dname, sizeof(dname));
+                    printf("[ACTIVE] Switched active peer to [%d] %s @ %s\n", idx + 1, dname, sel_url);
                 } else {
-                    printf("[OFFLINE] %s\n", g_active_peer);
+                    pthread_mutex_unlock(&g_peer_mutex);
+                    char norm[256];
+                    normalize_peer_url(tgt, norm, sizeof(norm));
+                    char remote_name[128] = "";
+                    if (send_connect(norm, g_local_name, g_local_port, remote_name, sizeof(remote_name))) {
+                        pthread_mutex_lock(&g_peer_mutex);
+                        int n_idx = peer_upsert_locked(norm, remote_name, false);
+                        peer_switch_locked(n_idx);
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        char dname[128];
+                        format_peer_display_name(remote_name, dname, sizeof(dname));
+                        printf("[CONNECT] Connected & switched to [%d] %s <%s>\n", n_idx + 1, norm, dname);
+                    } else if (ping_peer(norm, remote_name, sizeof(remote_name))) {
+                        pthread_mutex_lock(&g_peer_mutex);
+                        int n_idx = peer_upsert_locked(norm, remote_name, false);
+                        peer_switch_locked(n_idx);
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        char dname[128];
+                        format_peer_display_name(remote_name, dname, sizeof(dname));
+                        printf("[ONLINE] Added & switched to [%d] %s <%s>\n", n_idx + 1, norm, dname);
+                    } else {
+                        pthread_mutex_lock(&g_peer_mutex);
+                        int n_idx = peer_upsert_locked(norm, "peer", false);
+                        peer_switch_locked(n_idx);
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        printf("[PEER] Switched to [%d] %s (unreachable/offline)\n", n_idx + 1, norm);
+                    }
                 }
                 print_history(g_active_peer, 10);
-            } else if (strcmp(line, "/peer") == 0 || strcmp(line, "/connect") == 0) {
-                printf("[PEER] %s\n", g_active_peer[0] ? g_active_peer : "none");
-            } else if (strncmp(line, "/nick ", 6) == 0 || strncmp(line, "/name ", 6) == 0) {
-                const char *new_nick = line + 6;
-                while (*new_nick == ' ') new_nick++;
-                if (*new_nick) {
-                    char old_name[64];
-                    snprintf(old_name, sizeof(old_name), "%s", g_local_name);
-                    snprintf(g_local_name, sizeof(g_local_name), "%.*s", (int)sizeof(g_local_name) - 1, new_nick);
-                    save_nickname(g_local_name);
-                    if (g_active_peer[0]) {
-                        send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name));
+            } else if (strcmp(line, "/peer") == 0 || strcmp(line, "/connect") == 0 || strcmp(line, "/switch") == 0) {
+                print_peers_table();
+            } else if (strcmp(line, "/peers") == 0) {
+                print_peers_table();
+            } else if (strncmp(line, "/scan", 5) == 0 || strncmp(line, "/discover", 9) == 0) {
+                int sport = DEFAULT_PORT;
+                const char *sp = strchr(line, ' ');
+                if (sp) sport = atoi(sp + 1);
+                if (sport <= 0) sport = DEFAULT_PORT;
+                scan_network(sport);
+                print_peers_table();
+            } else if (strncmp(line, "/replace ", 9) == 0) {
+                char target[128] = "", new_url[256] = "";
+                if (sscanf(line + 9, "%127s %255s", target, new_url) == 2) {
+                    pthread_mutex_lock(&g_peer_mutex);
+                    int idx = peer_find_locked(target);
+                    if (idx == -2) {
+                        int total = g_peer_count;
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        printf("[ERROR] Peer index out of range (1-%d registered)\n", total);
+                        continue;
                     }
-                    printf("[NICK] %s -> %s\n", old_name, g_local_name);
-                } else {
-                    printf("[NICK] %s\n", g_local_name);
-                }
-            } else if (strcmp(line, "/nick") == 0 || strcmp(line, "/name") == 0) {
-                printf("[NICK] %s\n", g_local_name);
-            } else if (strncmp(line, "/me ", 4) == 0) {
-                const char *action = line + 4;
-                while (*action == ' ') action++;
-                if (!g_active_peer[0]) {
-                    printf("[ERROR] no active peer (use /peer <url>)\n");
-                } else {
-                    if (send_http_message(g_active_peer, g_local_name, line, g_local_port)) {
-                        time_t now = time(NULL);
-                        struct tm *tm = localtime(&now);
-                        printf("[ACTION] %02d:%02d:%02d * %s %s\n",
-                               tm->tm_hour, tm->tm_min, tm->tm_sec,
-                               g_local_name, action);
+                    if (idx >= 0) {
+                        peer_replace_locked(idx, new_url, NULL);
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        char rem_name[128] = "";
+                        ping_peer(new_url, rem_name, sizeof(rem_name));
+                        pthread_mutex_lock(&g_peer_mutex);
+                        if (rem_name[0]) {
+                            safe_strncpy(g_peers[idx].name, rem_name, sizeof(g_peers[idx].name));
+                        }
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        printf("[REPLACE] Peer [%d] replaced with %s\n", idx + 1, new_url);
                     } else {
-                        printf("[ERROR] send failed: delivery failed to %s\n", g_active_peer);
+                        pthread_mutex_unlock(&g_peer_mutex);
+                        printf("[ERROR] Peer '%s' not found in peer table\n", target);
                     }
+                } else {
+                    printf("usage: /replace <#|name> <new_url>\n");
                 }
-            } else if (strcmp(line, "/me") == 0) {
-                printf("usage: /me <action>\n");
+            } else if (strncmp(line, "/all ", 5) == 0 || strncmp(line, "/broadcast ", 11) == 0) {
+                const char *msg = (strncmp(line, "/all ", 5) == 0) ? line + 5 : line + 11;
+                while (*msg == ' ') msg++;
+                if (*msg) {
+                    send_broadcast(msg);
+                } else {
+                    printf("usage: /all <message>\n");
+                }
+            } else if (strncmp(line, "/disconnect", 11) == 0) {
+                const char *tgt = line + 11;
+                while (*tgt == ' ') tgt++;
+                pthread_mutex_lock(&g_peer_mutex);
+                int idx = (*tgt) ? peer_find_locked(tgt) : g_active_peer_idx;
+                if (idx == -2) {
+                    int total = g_peer_count;
+                    pthread_mutex_unlock(&g_peer_mutex);
+                    printf("[ERROR] Peer index out of range (1-%d registered)\n", total);
+                    continue;
+                }
+                if (idx >= 0 && idx < g_peer_count) {
+                    char d_url[256];
+                    safe_strncpy(d_url, g_peers[idx].url, sizeof(d_url));
+                    g_peers[idx].online = false;
+                    if (g_active_peer_idx == idx) {
+                        g_active_peer_idx = -1;
+                        g_active_peer[0] = '\0';
+                        g_peer_name[0] = '\0';
+                        for (int k = 0; k < g_peer_count; k++) {
+                            if (g_peers[k].online) {
+                                peer_switch_locked(k);
+                                break;
+                            }
+                        }
+                    }
+                    pthread_mutex_unlock(&g_peer_mutex);
+                    send_disconnect(d_url, g_local_name);
+                    printf("[DISCONNECT] Peer [%d] %s disconnected\n", idx + 1, d_url);
+                } else {
+                    pthread_mutex_unlock(&g_peer_mutex);
+                    printf("[DISCONNECT] No active peer to disconnect\n");
+                }
             } else if (strcmp(line, "/whois") == 0) {
                 print_whois();
-            } else if (strcmp(line, "/history") == 0) {
-                print_history(g_active_peer, 20);
-            } else if (strcmp(line, "/peers") == 0) {
-                printf("[PEERS]\n");
-                print_history("", 50);
             } else if (strcmp(line, "/info") == 0 || strcmp(line, "/status") == 0) {
                 char cur_url[128];
                 get_primary_url(g_local_port, cur_url, sizeof(cur_url));
@@ -1488,9 +1949,11 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-        printf("girchat / shnet (Native C) - Dual-Stack IPv6 Peer Mesh & Self-Contained Node Runtime\n\n"
+        printf("girchat / shnet (Native C) - Dual-Stack IPv6 Peer Mesh & Node Runtime\n\n"
                "Usage:\n"
-               "  girchat [peer] [-p port] [-n name]      Interactive CLI-to-CLI chat\n"
+               "  girchat [peer] [-p port] [-n name]      Interactive CLI chat & peer mesh\n"
+               "  girchat scan [port]                     Scan local network for active nodes\n"
+               "  girchat peers                           List known & registered peers\n"
                "  shnet chat [peer] [-p port] [-n name]   Interactive CLI chat\n"
                "  shnet serve [dir] [-p port] [-q]        Serve static files from directory\n"
                "  shnet send <peer> <message>             Send a one-shot message\n"
@@ -1505,6 +1968,21 @@ int main(int argc, char *argv[]) {
 
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) {
         printf("girchat version %s (Native C / Linux / Dual-Stack IPv6)\n", GIRCHAT_VERSION);
+        return 0;
+    }
+
+    if (strcmp(cmd, "scan") == 0 || strcmp(cmd, "--scan") == 0 || strcmp(cmd, "discover") == 0) {
+        int port = DEFAULT_PORT;
+        if (argc >= 3) port = atoi(argv[2]);
+        load_history_peers();
+        scan_network(port);
+        print_peers_table();
+        return 0;
+    }
+
+    if (strcmp(cmd, "peers") == 0) {
+        load_history_peers();
+        print_peers_table();
         return 0;
     }
 
