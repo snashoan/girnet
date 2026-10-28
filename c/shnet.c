@@ -52,6 +52,7 @@ static char g_static_dir[2048] = "";
 static int g_local_port = DEFAULT_PORT;
 static volatile bool g_running = true;
 static pthread_mutex_t g_storage_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_peer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static inline void safe_write(int fd, const void *buf, size_t count) {
     if (write(fd, buf, count) < 0) { /* ignored */ }
@@ -153,6 +154,8 @@ static void escape_json(const char *src, char *dest, size_t max_len) {
 }
 
 static bool extract_json_str(const char *json, const char *key, char *out, size_t max_len) {
+    if (!json || !key || !out || max_len == 0) return false;
+    out[0] = '\0';
     char search[128];
     snprintf(search, sizeof(search), "\"%s\"", key);
     const char *pos = strstr(json, search);
@@ -165,7 +168,10 @@ static bool extract_json_str(const char *json, const char *key, char *out, size_
     pos++;
     size_t idx = 0;
     while (*pos && *pos != '"' && idx + 1 < max_len) {
-        if (*pos == '\\' && *(pos + 1)) pos++;
+        if (*pos == '\\') {
+            pos++;
+            if (!*pos) break;
+        }
         out[idx++] = *pos++;
     }
     out[idx] = '\0';
@@ -761,7 +767,9 @@ static void handle_static_file(int client_sock, const char *req_path, bool is_he
         send_404(client_sock);
         return;
     }
-    if (strncmp(resolved, g_static_dir, strlen(g_static_dir)) != 0) {
+    size_t sdir_len = strlen(g_static_dir);
+    if (strncmp(resolved, g_static_dir, sdir_len) != 0 ||
+        (resolved[sdir_len] != '\0' && resolved[sdir_len] != '/')) {
         send_403(client_sock);
         return;
     }
@@ -785,20 +793,30 @@ static void handle_static_file(int client_sock, const char *req_path, bool is_he
             int pos = snprintf(html, sizeof(html),
                 "<!DOCTYPE html><html><head><title>Index of %s</title></head><body>"
                 "<h2>Index of %s</h2><ul>", clean_path, clean_path);
+            if (pos < 0 || pos >= (int)sizeof(html)) pos = sizeof(html) - 1;
             if (strcmp(clean_path, "/") != 0) {
-                pos += snprintf(html + pos, sizeof(html) - pos, "<li><a href='../'>..</a></li>");
+                int n = snprintf(html + pos, sizeof(html) - pos, "<li><a href='../'>..</a></li>");
+                if (n > 0) pos += (pos + n < (int)sizeof(html)) ? n : ((int)sizeof(html) - 1 - pos);
             }
             struct dirent *ent;
             while ((ent = readdir(d)) != NULL) {
                 if (ent->d_name[0] == '.') continue;
                 char slash[2] = "";
                 if (ent->d_type == DT_DIR) slash[0] = '/';
-                pos += snprintf(html + pos, sizeof(html) - pos,
-                    "<li><a href='%s%s'>%s%s</a></li>", ent->d_name, slash, ent->d_name, slash);
-                if (pos >= (int)sizeof(html) - 200) break;
+                if ((int)sizeof(html) - pos > 200) {
+                    int n = snprintf(html + pos, sizeof(html) - pos,
+                        "<li><a href='%s%s'>%s%s</a></li>", ent->d_name, slash, ent->d_name, slash);
+                    if (n > 0) pos += (pos + n < (int)sizeof(html)) ? n : ((int)sizeof(html) - 1 - pos);
+                } else {
+                    break;
+                }
             }
             closedir(d);
-            snprintf(html + pos, sizeof(html) - pos, "</ul></body></html>");
+            if ((int)sizeof(html) - pos > 25) {
+                snprintf(html + pos, sizeof(html) - pos, "</ul></body></html>");
+            } else {
+                html[sizeof(html) - 1] = '\0';
+            }
 
             char header[256];
             snprintf(header, sizeof(header),
@@ -838,9 +856,16 @@ static void handle_static_file(int client_sock, const char *req_path, bool is_he
 }
 
 static void extract_peer_ip(int sock, char *out_ip, size_t max_len) {
+    if (!out_ip || max_len == 0) return;
+    out_ip[0] = '\0';
     struct sockaddr_storage peer_addr;
+    memset(&peer_addr, 0, sizeof(peer_addr));
     socklen_t peer_len = sizeof(peer_addr);
-    getpeername(sock, (struct sockaddr *)&peer_addr, &peer_len);
+    if (getpeername(sock, (struct sockaddr *)&peer_addr, &peer_len) != 0) {
+        strncpy(out_ip, "unknown", max_len - 1);
+        out_ip[max_len - 1] = '\0';
+        return;
+    }
 
     if (peer_addr.ss_family == AF_INET6) {
         struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&peer_addr;
@@ -848,17 +873,25 @@ static void extract_peer_ip(int sock, char *out_ip, size_t max_len) {
             inet_ntop(AF_INET, &s6->sin6_addr.s6_addr[12], out_ip, max_len);
         } else {
             char temp_ip[INET6_ADDRSTRLEN];
-            inet_ntop(AF_INET6, &s6->sin6_addr, temp_ip, sizeof(temp_ip));
-            if (strcmp(temp_ip, "::1") == 0) {
-                strncpy(out_ip, "127.0.0.1", max_len - 1);
+            if (inet_ntop(AF_INET6, &s6->sin6_addr, temp_ip, sizeof(temp_ip))) {
+                if (strcmp(temp_ip, "::1") == 0) {
+                    strncpy(out_ip, "127.0.0.1", max_len - 1);
+                } else {
+                    snprintf(out_ip, max_len, "[%s]", temp_ip);
+                }
             } else {
-                snprintf(out_ip, max_len, "[%s]", temp_ip);
+                strncpy(out_ip, "unknown", max_len - 1);
             }
         }
-    } else {
+    } else if (peer_addr.ss_family == AF_INET) {
         struct sockaddr_in *s4 = (struct sockaddr_in *)&peer_addr;
-        inet_ntop(AF_INET, &s4->sin_addr, out_ip, max_len);
+        if (!inet_ntop(AF_INET, &s4->sin_addr, out_ip, max_len)) {
+            strncpy(out_ip, "unknown", max_len - 1);
+        }
+    } else {
+        strncpy(out_ip, "unknown", max_len - 1);
     }
+    out_ip[max_len - 1] = '\0';
 }
 
 static void print_prompt(void);
@@ -919,9 +952,10 @@ static void *handle_client(void *arg) {
         int c_port = atoi(port_str);
         if (c_port <= 0) c_port = DEFAULT_PORT;
 
-        char client_ip[128];
+        char client_ip[128] = "";
         extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
 
+        pthread_mutex_lock(&g_peer_mutex);
         if (internet_url[0] && strcmp(client_ip, "127.0.0.1") != 0 && strcmp(client_ip, "::1") != 0) {
             strncpy(g_active_peer, internet_url, sizeof(g_active_peer) - 1);
             g_active_peer[sizeof(g_active_peer) - 1] = '\0';
@@ -930,10 +964,14 @@ static void *handle_client(void *arg) {
         }
         strncpy(g_peer_name, name, sizeof(g_peer_name) - 1);
         g_peer_name[sizeof(g_peer_name) - 1] = '\0';
+        char active_copy[256];
+        strncpy(active_copy, g_active_peer, sizeof(active_copy) - 1);
+        active_copy[sizeof(active_copy) - 1] = '\0';
+        pthread_mutex_unlock(&g_peer_mutex);
 
         char dname[128];
         format_peer_display_name(name, dname, sizeof(dname));
-        printf("\r\033[2K[CONNECT] %s <%s>\n", g_active_peer, dname);
+        printf("\r\033[2K[CONNECT] %s <%s>\n", active_copy, dname);
         print_prompt();
 
         char primary_url[128];
@@ -955,8 +993,10 @@ static void *handle_client(void *arg) {
         format_peer_display_name(name, dname, sizeof(dname));
         printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
         if (g_is_host) {
+            pthread_mutex_lock(&g_peer_mutex);
             g_active_peer[0] = '\0';
             g_peer_name[0] = '\0';
+            pthread_mutex_unlock(&g_peer_mutex);
         }
         print_prompt();
         const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
@@ -971,30 +1011,39 @@ static void *handle_client(void *arg) {
 
         int rp = atoi(r_port);
         if (rp > 0) {
-            char client_ip[128];
+            char client_ip[128] = "";
             extract_peer_ip(client_sock, client_ip, sizeof(client_ip));
+            pthread_mutex_lock(&g_peer_mutex);
             if (!g_active_peer[0]) {
                 snprintf(g_active_peer, sizeof(g_active_peer), "%s:%d", client_ip, rp);
                 strncpy(g_peer_name, sender, sizeof(g_peer_name) - 1);
                 g_peer_name[sizeof(g_peer_name) - 1] = '\0';
             }
+            pthread_mutex_unlock(&g_peer_mutex);
         }
 
-        save_message(id, sender, g_active_peer[0] ? g_active_peer : "peer", text, "IN");
+        char peer_copy[256];
+        pthread_mutex_lock(&g_peer_mutex);
+        strncpy(peer_copy, g_active_peer[0] ? g_active_peer : "peer", sizeof(peer_copy) - 1);
+        peer_copy[sizeof(peer_copy) - 1] = '\0';
+        pthread_mutex_unlock(&g_peer_mutex);
+
+        save_message(id, sender, peer_copy, text, "IN");
 
         time_t now = time(NULL);
-        struct tm *tm = localtime(&now);
+        struct tm tm_buf;
+        struct tm *tm = localtime_r(&now, &tm_buf);
         char dname[128];
         format_peer_display_name(sender, dname, sizeof(dname));
 
         printf("\r\033[2K");
         if (strncmp(text, "/me ", 4) == 0) {
             printf("[ACTION] %02d:%02d:%02d * %s %s\n",
-                   tm->tm_hour, tm->tm_min, tm->tm_sec,
+                   tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0, tm ? tm->tm_sec : 0,
                    dname, text + 4);
         } else {
             printf("[RECV] %02d:%02d:%02d <%s> %s\n",
-                   tm->tm_hour, tm->tm_min, tm->tm_sec,
+                   tm ? tm->tm_hour : 0, tm ? tm->tm_min : 0, tm ? tm->tm_sec : 0,
                    dname, text);
         }
         print_prompt();
@@ -1055,6 +1104,11 @@ static void *handle_client(void *arg) {
 
 static void *server_thread(void *arg) {
     int server_sock = (int)(intptr_t)arg;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1024 * 1024);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
     while (g_running) {
         struct sockaddr_storage client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -1064,9 +1118,11 @@ static void *server_thread(void *arg) {
             continue;
         }
         pthread_t tid;
-        pthread_create(&tid, NULL, handle_client, (void *)(intptr_t)client_sock);
-        pthread_detach(tid);
+        if (pthread_create(&tid, &attr, handle_client, (void *)(intptr_t)client_sock) != 0) {
+            close(client_sock);
+        }
     }
+    pthread_attr_destroy(&attr);
     close(server_sock);
     return NULL;
 }
@@ -1119,11 +1175,21 @@ static int bind_dual_stack_server(int preferred_port, int *out_port) {
 static void print_prompt(void) {
     if (!isatty(STDIN_FILENO)) return;
     char dname[128];
-    if (g_peer_name[0]) {
-        format_peer_display_name(g_peer_name, dname, sizeof(dname));
+    char pname[128] = "";
+    char apeer[256] = "";
+
+    pthread_mutex_lock(&g_peer_mutex);
+    strncpy(pname, g_peer_name, sizeof(pname) - 1);
+    pname[sizeof(pname) - 1] = '\0';
+    strncpy(apeer, g_active_peer, sizeof(apeer) - 1);
+    apeer[sizeof(apeer) - 1] = '\0';
+    pthread_mutex_unlock(&g_peer_mutex);
+
+    if (pname[0]) {
+        format_peer_display_name(pname, dname, sizeof(dname));
         printf("%s[%s]> ", g_local_name, dname);
-    } else if (g_active_peer[0]) {
-        printf("%s[%s]> ", g_local_name, g_active_peer);
+    } else if (apeer[0]) {
+        printf("%s[%s]> ", g_local_name, apeer);
     } else {
         printf("%s> ", g_local_name);
     }
@@ -1190,8 +1256,12 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
         return;
     }
 
+    pthread_attr_t sattr;
+    pthread_attr_init(&sattr);
+    pthread_attr_setstacksize(&sattr, 1024 * 1024);
     pthread_t stid;
-    pthread_create(&stid, NULL, server_thread, (void *)(intptr_t)server_sock);
+    pthread_create(&stid, &sattr, server_thread, (void *)(intptr_t)server_sock);
+    pthread_attr_destroy(&sattr);
 
     char primary_url[128];
     get_primary_url(g_local_port, primary_url, sizeof(primary_url));
@@ -1389,15 +1459,25 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
     }
     printf("\nPress Ctrl+C to stop.\n\n");
 
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 1024 * 1024);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
     while (g_running) {
         struct sockaddr_storage client_addr;
         socklen_t client_len = sizeof(client_addr);
         int client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock < 0) break;
+        if (client_sock < 0) {
+            if (!g_running) break;
+            continue;
+        }
         pthread_t tid;
-        pthread_create(&tid, NULL, handle_client, (void *)(intptr_t)client_sock);
-        pthread_detach(tid);
+        if (pthread_create(&tid, &attr, handle_client, (void *)(intptr_t)client_sock) != 0) {
+            close(client_sock);
+        }
     }
+    pthread_attr_destroy(&attr);
     close(server_sock);
 }
 

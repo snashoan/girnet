@@ -8,5 +8,11 @@ shnet: shnet.c qrcodegen.c
 	$(CC) $(CFLAGS) shnet.c qrcodegen.c -o shnet $(LDFLAGS)
 	strip shnet 2>/dev/null || true
 
+deploy: shnet
+	mkdir -p /root/workspace/download
+	rm -f /root/workspace/download/girchat /root/workspace/download/shnet
+	cp shnet /root/workspace/download/girchat
+	cp shnet /root/workspace/download/shnet
+
 clean:
 	rm -f shnet shnet-musl *.o
