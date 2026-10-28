@@ -2001,7 +2001,13 @@ int main(int argc, char *argv[]) {
 
     if (strcmp(cmd, "links") == 0) {
         int port = DEFAULT_PORT;
-        if (argc >= 3) port = atoi(argv[2]);
+        for (int i = 2; i < argc; i++) {
+            if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
+                port = atoi(argv[++i]);
+            } else if (argv[i][0] != '-') {
+                port = atoi(argv[i]);
+            }
+        }
         print_links(port);
         return 0;
     }
