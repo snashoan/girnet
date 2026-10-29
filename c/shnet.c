@@ -1269,6 +1269,266 @@ static void extract_peer_ip(int sock, char *out_ip, size_t max_len) {
 
 static void print_prompt(void);
 
+static void send_500(int sock) {
+    const char *resp = "HTTP/1.1 500 Internal Server Error\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 21\r\nConnection: close\r\n\r\nInternal Server Error";
+    safe_write(sock, resp, strlen(resp));
+}
+
+static void send_json_history(int client_sock, int limit) {
+    char path[512];
+    get_history_path(path, sizeof(path));
+
+    pthread_mutex_lock(&g_storage_mutex);
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        pthread_mutex_unlock(&g_storage_mutex);
+        const char *resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+        safe_write(client_sock, resp, strlen(resp));
+        return;
+    }
+
+    size_t cap = 256 * 1024;
+    char *buf = malloc(cap);
+    if (!buf) {
+        fclose(f);
+        pthread_mutex_unlock(&g_storage_mutex);
+        send_500(client_sock);
+        return;
+    }
+
+    char line[4096];
+    int total_lines = 0;
+    while (fgets(line, sizeof(line), f)) total_lines++;
+
+    int skip = (limit > 0 && total_lines > limit) ? (total_lines - limit) : 0;
+    rewind(f);
+
+    size_t len = 0;
+    buf[len++] = '[';
+    buf[len++] = '\n';
+
+    int cur = 0;
+    bool first = true;
+    while (fgets(line, sizeof(line), f)) {
+        if (cur++ < skip) continue;
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        char *cr = strchr(line, '\r');
+        if (cr) *cr = '\0';
+        if (!line[0]) continue;
+
+        size_t line_len = strlen(line);
+        if (len + line_len + 4 < cap) {
+            if (!first) {
+                buf[len++] = ',';
+                buf[len++] = '\n';
+            }
+            memcpy(buf + len, line, line_len);
+            len += line_len;
+            first = false;
+        }
+    }
+    fclose(f);
+    pthread_mutex_unlock(&g_storage_mutex);
+
+    if (len + 3 < cap) {
+        buf[len++] = '\n';
+        buf[len++] = ']';
+        buf[len] = '\0';
+    }
+
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr),
+             "HTTP/1.1 200 OK\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
+             "Content-Type: application/json; charset=utf-8\r\n"
+             "Content-Length: %zu\r\n"
+             "Connection: close\r\n\r\n",
+             len);
+    safe_write(client_sock, hdr, strlen(hdr));
+    safe_write(client_sock, buf, len);
+    free(buf);
+}
+
+static void send_json_state(int client_sock) {
+    char primary_url[256] = "";
+    get_primary_url(g_local_port, primary_url, sizeof(primary_url));
+
+    size_t cap = 32 * 1024;
+    char *buf = malloc(cap);
+    if (!buf) {
+        send_500(client_sock);
+        return;
+    }
+
+    pthread_mutex_lock(&g_peer_mutex);
+    size_t len = snprintf(buf, cap,
+        "{\n"
+        "  \"name\": \"%s\",\n"
+        "  \"version\": \"%s\",\n"
+        "  \"port\": %d,\n"
+        "  \"primary_url\": \"%s\",\n"
+        "  \"active_peer\": \"%s\",\n"
+        "  \"active_peer_idx\": %d,\n"
+        "  \"active_peer_name\": \"%s\",\n"
+        "  \"peer_count\": %d,\n"
+        "  \"peers\": [\n",
+        g_local_name, GIRCHAT_VERSION, g_local_port, primary_url,
+        g_active_peer, g_active_peer_idx, g_peer_name, g_peer_count);
+
+    for (int i = 0; i < g_peer_count; i++) {
+        char esc_pname[128];
+        escape_json(g_peers[i].name, esc_pname, sizeof(esc_pname));
+        char esc_purl[256];
+        escape_json(g_peers[i].url, esc_purl, sizeof(esc_purl));
+
+        len += snprintf(buf + len, cap - len,
+            "    {\"index\": %d, \"name\": \"%s\", \"url\": \"%s\", \"version\": \"%s\", \"online\": %s, \"active\": %s}%s\n",
+            i + 1, esc_pname, esc_purl,
+            g_peers[i].version[0] ? g_peers[i].version : "unknown",
+            g_peers[i].online ? "true" : "false",
+            (i == g_active_peer_idx) ? "true" : "false",
+            (i + 1 < g_peer_count) ? "," : "");
+        if (len >= cap - 256) break;
+    }
+    pthread_mutex_unlock(&g_peer_mutex);
+
+    len += snprintf(buf + len, cap - len, "  ]\n}");
+
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr),
+             "HTTP/1.1 200 OK\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
+             "Content-Type: application/json; charset=utf-8\r\n"
+             "Content-Length: %zu\r\n"
+             "Connection: close\r\n\r\n",
+             len);
+    safe_write(client_sock, hdr, strlen(hdr));
+    safe_write(client_sock, buf, len);
+    free(buf);
+}
+
+static void handle_api_relay(int client_sock, const char *body) {
+    char cmd[2048] = "";
+    char text[4096] = "";
+    char sender[128] = "";
+    extract_json_str(body, "cmd", cmd, sizeof(cmd));
+    extract_json_str(body, "text", text, sizeof(text));
+    extract_json_str(body, "sender", sender, sizeof(sender));
+
+    if (!cmd[0] && text[0]) {
+        if (text[0] == '/') {
+            safe_strncpy(cmd, text, sizeof(cmd));
+        }
+    }
+
+    char resp_msg[512] = "ok";
+    bool success = true;
+
+    if (cmd[0]) {
+        printf("\r\033[2K[RELAY-CMD] %s\n", cmd);
+        print_prompt();
+
+        if (strncmp(cmd, "/scan", 5) == 0 || strncmp(cmd, "/discover", 9) == 0) {
+            int sport = DEFAULT_PORT;
+            const char *sp = strchr(cmd, ' ');
+            if (sp) sport = atoi(sp + 1);
+            if (sport <= 0) sport = DEFAULT_PORT;
+            scan_network(sport);
+            snprintf(resp_msg, sizeof(resp_msg), "Network scan complete (%d peers registered)", g_peer_count);
+        } else if (strncmp(cmd, "/peer ", 6) == 0 || strncmp(cmd, "/connect ", 9) == 0 || strncmp(cmd, "/switch ", 8) == 0) {
+            const char *tgt = (cmd[1] == 'p') ? cmd + 6 : ((cmd[1] == 'c') ? cmd + 9 : cmd + 8);
+            while (*tgt == ' ') tgt++;
+            pthread_mutex_lock(&g_peer_mutex);
+            int idx = peer_find_locked(tgt);
+            if (idx >= 0) {
+                peer_switch_locked(idx);
+                snprintf(resp_msg, sizeof(resp_msg), "Switched to peer [%d] %s", idx + 1, g_peers[idx].url);
+            } else if (idx == -2) {
+                snprintf(resp_msg, sizeof(resp_msg), "Peer index out of range (1-%d)", g_peer_count);
+                success = false;
+            } else {
+                char norm[256];
+                normalize_peer_url(tgt, norm, sizeof(norm));
+                char rem_name[128] = "", rem_ver[64] = "";
+                pthread_mutex_unlock(&g_peer_mutex);
+                bool pong = ping_peer(norm, rem_name, sizeof(rem_name), rem_ver, sizeof(rem_ver));
+                pthread_mutex_lock(&g_peer_mutex);
+                int n_idx = peer_upsert_locked(norm, rem_name[0] ? rem_name : "peer", rem_ver, pong);
+                peer_switch_locked(n_idx);
+                snprintf(resp_msg, sizeof(resp_msg), "Added & switched to [%d] %s (%s)", n_idx + 1, norm, pong ? "online" : "offline");
+            }
+            pthread_mutex_unlock(&g_peer_mutex);
+        } else if (strncmp(cmd, "/nick ", 6) == 0) {
+            const char *new_nick = cmd + 6;
+            while (*new_nick == ' ') new_nick++;
+            if (*new_nick) {
+                safe_strncpy(g_local_name, new_nick, sizeof(g_local_name));
+                save_nickname(g_local_name);
+                snprintf(resp_msg, sizeof(resp_msg), "Nickname updated to %s", g_local_name);
+            }
+        } else if (strncmp(cmd, "/all ", 5) == 0 || strncmp(cmd, "/broadcast ", 11) == 0) {
+            const char *bmsg = (strncmp(cmd, "/all ", 5) == 0) ? cmd + 5 : cmd + 11;
+            while (*bmsg == ' ') bmsg++;
+            send_broadcast(bmsg);
+            snprintf(resp_msg, sizeof(resp_msg), "Broadcast sent to all peers");
+        } else if (strncmp(cmd, "/disconnect", 11) == 0) {
+            pthread_mutex_lock(&g_peer_mutex);
+            if (g_active_peer[0]) {
+                char d_url[256];
+                safe_strncpy(d_url, g_active_peer, sizeof(d_url));
+                if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
+                    g_peers[g_active_peer_idx].online = false;
+                }
+                g_active_peer[0] = '\0';
+                g_peer_name[0] = '\0';
+                g_active_peer_idx = -1;
+                pthread_mutex_unlock(&g_peer_mutex);
+                send_disconnect(d_url, g_local_name);
+                snprintf(resp_msg, sizeof(resp_msg), "Disconnected from %s", d_url);
+            } else {
+                pthread_mutex_unlock(&g_peer_mutex);
+                snprintf(resp_msg, sizeof(resp_msg), "No active peer to disconnect");
+            }
+        } else {
+            snprintf(resp_msg, sizeof(resp_msg), "Command received: %s", cmd);
+        }
+    } else if (text[0]) {
+        if (!g_active_peer[0]) {
+            snprintf(resp_msg, sizeof(resp_msg), "No active peer selected. Connect or select a peer first.");
+            success = false;
+        } else {
+            printf("\r\033[2K[RELAY-MSG] <%s> %s\n", g_local_name, text);
+            print_prompt();
+            bool sent = send_http_message(g_active_peer, g_local_name, text, g_local_port);
+            if (sent) {
+                snprintf(resp_msg, sizeof(resp_msg), "Message delivered to %s", g_active_peer);
+            } else {
+                snprintf(resp_msg, sizeof(resp_msg), "Failed to deliver message to %s (peer offline)", g_active_peer);
+                success = false;
+            }
+        }
+    }
+
+    char esc_resp[1024];
+    escape_json(resp_msg, esc_resp, sizeof(esc_resp));
+    char json_resp[1500];
+    snprintf(json_resp, sizeof(json_resp),
+             "{\"status\":\"%s\",\"message\":\"%s\",\"active_peer\":\"%s\",\"local_name\":\"%s\"}",
+             success ? "ok" : "error", esc_resp, g_active_peer, g_local_name);
+
+    char hdr[256];
+    snprintf(hdr, sizeof(hdr),
+             "HTTP/1.1 200 OK\r\n"
+             "Access-Control-Allow-Origin: *\r\n"
+             "Content-Type: application/json; charset=utf-8\r\n"
+             "Content-Length: %zu\r\n"
+             "Connection: close\r\n\r\n",
+             strlen(json_resp));
+    safe_write(client_sock, hdr, strlen(hdr));
+    safe_write(client_sock, json_resp, strlen(json_resp));
+}
+
 static void *handle_client(void *arg) {
     int client_sock = (int)(intptr_t)arg;
     struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
@@ -1315,7 +1575,29 @@ static void *handle_client(void *arg) {
 
     char *body = header_end + 4;
 
-    if (strncmp(buffer, "POST /api/chat/connect", 22) == 0) {
+    if (strncmp(buffer, "OPTIONS ", 8) == 0) {
+        const char *resp = "HTTP/1.1 204 No Content\r\n"
+                           "Access-Control-Allow-Origin: *\r\n"
+                           "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                           "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+                           "Content-Length: 0\r\n"
+                           "Connection: close\r\n\r\n";
+        safe_write(client_sock, resp, strlen(resp));
+        close(client_sock);
+        return NULL;
+    }
+
+    if (strncmp(buffer, "POST /api/relay", 15) == 0) {
+        handle_api_relay(client_sock, body);
+    } else if (strncmp(buffer, "GET /api/chat/history", 21) == 0) {
+        int limit = 60;
+        char *lim_str = strstr(buffer, "limit=");
+        if (lim_str) limit = atoi(lim_str + 6);
+        if (limit <= 0) limit = 60;
+        send_json_history(client_sock, limit);
+    } else if (strncmp(buffer, "GET /api/chat/state", 19) == 0) {
+        send_json_state(client_sock);
+    } else if (strncmp(buffer, "POST /api/chat/connect", 22) == 0) {
         char name[128] = "anonymous";
         char port_str[32] = "";
         char internet_url[256] = "";
@@ -1362,7 +1644,11 @@ static void *handle_client(void *arg) {
                  g_local_name, g_local_port, primary_url, GIRCHAT_VERSION);
         char resp[768];
         snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                 "HTTP/1.1 200 OK\r\n"
+                 "Access-Control-Allow-Origin: *\r\n"
+                 "Content-Type: application/json\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n\r\n%s",
                  strlen(resp_body), resp_body);
         safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "POST /api/chat/disconnect", 25) == 0) {
@@ -1380,7 +1666,11 @@ static void *handle_client(void *arg) {
 
         printf("\r\033[2K[DISCONNECT] <%s>\n", dname);
         print_prompt();
-        const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
+        const char *resp = "HTTP/1.1 200 OK\r\n"
+                           "Access-Control-Allow-Origin: *\r\n"
+                           "Content-Type: application/json\r\n"
+                           "Content-Length: 26\r\n"
+                           "Connection: close\r\n\r\n{\"status\":\"disconnected\"}";
         safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "POST /api/chat/message", 22) == 0) {
         char sender[128] = "anonymous", text[4096] = "", id[64] = "", r_port[32] = "", sender_ver[32] = "";
@@ -1432,7 +1722,11 @@ static void *handle_client(void *arg) {
         }
         print_prompt();
 
-        const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+        const char *resp = "HTTP/1.1 200 OK\r\n"
+                           "Access-Control-Allow-Origin: *\r\n"
+                           "Content-Type: application/json\r\n"
+                           "Content-Length: 15\r\n"
+                           "Connection: close\r\n\r\n{\"status\":\"ok\"}";
         safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "GET /api/chat/info", 18) == 0) {
         char resp_body[256];
@@ -1441,7 +1735,11 @@ static void *handle_client(void *arg) {
                  g_local_name, GIRCHAT_VERSION, g_local_port);
         char resp[512];
         snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                 "HTTP/1.1 200 OK\r\n"
+                 "Access-Control-Allow-Origin: *\r\n"
+                 "Content-Type: application/json\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n\r\n%s",
                  strlen(resp_body), resp_body);
         safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "GET /_shnet/status", 18) == 0) {
@@ -1451,7 +1749,11 @@ static void *handle_client(void *arg) {
                  GIRCHAT_VERSION, g_local_port);
         char resp[512];
         snprintf(resp, sizeof(resp),
-                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+                 "HTTP/1.1 200 OK\r\n"
+                 "Access-Control-Allow-Origin: *\r\n"
+                 "Content-Type: application/json\r\n"
+                 "Content-Length: %zu\r\n"
+                 "Connection: close\r\n\r\n%s",
                  strlen(resp_body), resp_body);
         safe_write(client_sock, resp, strlen(resp));
     } else {
@@ -1468,9 +1770,34 @@ static void *handle_client(void *arg) {
         }
 
         if (strcmp(req_path, "/") == 0 && g_static_dir[0] == '\0') {
-            const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\nhello from girchat (C)";
+            FILE *hf = fopen("/root/workspace/download/index.html", "r");
+            if (hf) {
+                fseek(hf, 0, SEEK_END);
+                long sz = ftell(hf);
+                fseek(hf, 0, SEEK_SET);
+                char *hbuf = malloc(sz + 1);
+                if (hbuf) {
+                    size_t rd = fread(hbuf, 1, sz, hf);
+                    hbuf[rd] = '\0';
+                    char resp_hdr[256];
+                    snprintf(resp_hdr, sizeof(resp_hdr),
+                             "HTTP/1.1 200 OK\r\n"
+                             "Access-Control-Allow-Origin: *\r\n"
+                             "Content-Type: text/html; charset=utf-8\r\n"
+                             "Content-Length: %zu\r\n"
+                             "Connection: close\r\n\r\n", rd);
+                    safe_write(client_sock, resp_hdr, strlen(resp_hdr));
+                    if (!is_head) safe_write(client_sock, hbuf, rd);
+                    free(hbuf);
+                    fclose(hf);
+                    close(client_sock);
+                    return NULL;
+                }
+                fclose(hf);
+            }
+            const char *resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\nhello from girchat (C)";
             if (is_head) {
-                const char *hresp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\n";
+                const char *hresp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\n";
                 safe_write(client_sock, hresp, strlen(hresp));
             } else {
                 safe_write(client_sock, resp, strlen(resp));

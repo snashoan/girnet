@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>girchat [dual-stack ipv6] - Web3 Node Console & Downloads</title>
+  <style>
+    :root {
+      --bg: #07090e;
+      --panel: #0d121d;
+      --card: #121826;
+      --border: #1e293b;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --green: #34d399;
+      --green-glow: rgba(52, 211, 153, 0.2);
+      --purple: #a855f7;
+      --purple-glow: rgba(168, 85, 247, 0.2);
+      --red: #f43f5e;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      font-family: var(--mono);
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -0.5px;
+      text-transform: uppercase;
+    }
+    .logo span { color: var(--accent); }
+    .badge {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-weight: 600;
+      border: 1px solid;
+    }
+    .badge-v6 {
+      color: var(--accent);
+      background: var(--accent-glow);
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--green);
+      background: var(--green-glow);
+      border-color: rgba(52, 211, 153, 0.3);
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+    .nav-tabs {
+      display: flex;
+      gap: 6px;
+      background: rgba(0,0,0,0.3);
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tab-btn:hover { color: #fff; }
+    .tab-btn.active {
+      background: var(--card);
+      color: var(--accent);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1200px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: flex; flex-direction: column; gap: 16px; flex: 1; }
+
+    /* Node Identity Bar */
+    .node-bar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 16px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+    }
+    .node-identity {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .node-key {
+      color: var(--accent);
+      background: rgba(56, 189, 248, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .host-selector {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .host-input {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      width: 180px;
+    }
+
+    /* Layout Split */
+    .chat-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 16px;
+      flex: 1;
+      min-height: 520px;
+    }
+    @media (max-width: 840px) {
+      .chat-layout { grid-template-columns: 1fr; }
+    }
+
+    /* Sidebar / Peers */
+    .sidebar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .sidebar-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .peer-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      max-height: 380px;
+      flex: 1;
+    }
+    .peer-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .peer-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .peer-card.active {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.08);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+    }
+    .peer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .peer-name {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: #fff;
+    }
+    .peer-status {
+      font-size: 0.7rem;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: var(--mono);
+    }
+    .peer-status.online { background: var(--green-glow); color: var(--green); }
+    .peer-status.offline { background: rgba(244, 63, 94, 0.15); color: var(--red); }
+    .peer-url {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    .connect-form {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+    .connect-input {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    .connect-input:focus, .host-input:focus, .chat-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    /* Chat Area */
+    .chat-area {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .chat-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chat-target {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .target-pill {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .chat-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    /* Messages Stream */
+    .messages-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 340px;
+      max-height: 480px;
+      background: #090d14;
+    }
+    .msg-bubble {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      position: relative;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .msg-out {
+      align-self: flex-end;
+      background: #112233;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-bottom-right-radius: 2px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .msg-in {
+      align-self: flex-start;
+      background: #1c152d;
+      border: 1px solid rgba(168, 85, 247, 0.35);
+      border-bottom-left-radius: 2px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .msg-action {
+      align-self: center;
+      background: rgba(52, 211, 153, 0.08);
+      border: 1px dashed rgba(52, 211, 153, 0.3);
+      color: var(--green);
+      font-style: italic;
+      font-size: 0.82rem;
+      padding: 5px 12px;
+      border-radius: 20px;
+    }
+    .msg-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      margin-bottom: 4px;
+      opacity: 0.75;
+    }
+    .msg-sender { font-weight: 700; color: #fff; }
+    .msg-out .msg-sender { color: var(--accent); }
+    .msg-in .msg-sender { color: var(--purple); }
+
+    /* Quick Chips */
+    .quick-chips {
+      display: flex;
+      gap: 6px;
+      padding: 8px 14px;
+      background: rgba(0,0,0,0.25);
+      border-top: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .chip {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+    .chip:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Input Bar */
+    .chat-input-bar {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+    }
+    .chat-input {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.2s;
+      text-decoration: none;
+      font-family: var(--mono);
+    }
+    .btn-accent {
+      background: var(--accent);
+      color: #07090e;
+    }
+    .btn-accent:hover { filter: brightness(1.15); box-shadow: 0 0 10px var(--accent-glow); }
+    .btn-green {
+      background: var(--green);
+      color: #07090e;
+    }
+    .btn-green:hover { filter: brightness(1.15); }
+    .btn-muted {
+      background: var(--card);
+      color: var(--muted);
+      border-color: var(--border);
+    }
+    .btn-muted:hover { color: #fff; border-color: var(--accent); }
+    .btn-sm { padding: 4px 8px; font-size: 0.75rem; }
+
+    /* Downloads & Docs Card Styles */
+    .doc-section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .doc-section h2 { font-size: 1.3rem; color: #fff; }
+    .doc-section h3 { font-size: 1rem; color: var(--accent); margin-bottom: 6px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    pre {
+      background: #05070a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: #38bdf8;
+    }
+    .copy-box {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .copy-input {
+      flex: 1;
+      min-width: 220px;
+      background: #05070a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+
+    /* QR Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(4px);
+      z-index: 100;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 420px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; color: #fff; }
+    .qr-img {
+      width: 240px;
+      height: 240px;
+      border-radius: 8px;
+      border: 2px solid var(--accent);
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="logo">GIR<span>CHAT</span></div>
+      <span class="badge badge-v6">DUAL-STACK IPv6</span>
+      <span class="badge badge-status"><span class="dot"></span> NODE ONLINE</span>
+    </div>
+
+    <div class="nav-tabs">
+      <button class="tab-btn active" onclick="switchTab('chat')">Live Chat Console</button>
+      <button class="tab-btn" onclick="switchTab('downloads')">Downloads &amp; Guide</button>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-muted btn-sm" onclick="toggleQrModal()">QR Code</button>
+      <button class="btn btn-muted btn-sm" onclick="relayCommand('/scan')">Scan Subnet</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- TAB 1: LIVE CHAT CONSOLE -->
+    <div id="tab-chat" class="tab-content active">
+      
+      <!-- Node Identity Strip -->
+      <div class="node-bar">
+        <div class="node-identity">
+          <span>Identity: <strong id="nodeName">rei</strong></span>
+          <span class="node-key" id="nodeHash">0x7a8f...b379</span>
+          <span class="badge badge-v6" id="nodeEndpoint">http://[2409:4055:2db3:b379::d4]:8723/</span>
+        </div>
+
+        <div class="host-selector">
+          <label style="color:var(--muted); font-size:0.75rem;">Node URL:</label>
+          <input type="text" id="customHostInput" class="host-input" value="http://127.0.0.1:8723" title="Target Node API endpoint">
+          <button class="btn btn-muted btn-sm" onclick="applyCustomHost()">Bind</button>
+        </div>
+      </div>
+
+      <!-- Main Chat Layout -->
+      <div class="chat-layout">
+        
+        <!-- Sidebar / Peers Registry -->
+        <aside class="sidebar">
+          <div class="sidebar-title">
+            <span>Known Peers (<span id="peerCount">0</span>)</span>
+            <button class="btn btn-muted btn-sm" onclick="fetchState()" title="Refresh peer list">Sync</button>
+          </div>
+
+          <ul class="peer-list" id="peerList">
+            <li style="color:var(--muted); font-size:0.8rem; text-align:center; padding:20px 0;">
+              No peers discovered yet.<br>Click "Scan Subnet" or connect below.
+            </li>
+          </ul>
+
+          <div class="connect-form">
+            <label style="font-size:0.72rem; color:var(--muted); font-family:var(--mono);">Connect to Peer URL:</label>
+            <input type="text" id="newPeerUrl" class="connect-input" placeholder="http://[2409:...]:8723" onkeydown="if(event.key==='Enter') connectToPeer()">
+            <button class="btn btn-accent btn-sm" onclick="connectToPeer()">Connect Peer</button>
+          </div>
+        </aside>
+
+        <!-- Chat Stream & Console Area -->
+        <section class="chat-area">
+          <div class="chat-header">
+            <div class="chat-target">
+              <span style="font-size:0.8rem; color:var(--muted);">Active Target:</span>
+              <span class="target-pill" id="activePeerTarget">No Active Peer</span>
+            </div>
+            <div class="chat-actions">
+              <button class="btn btn-muted btn-sm" onclick="relayCommand('/peers')">/peers</button>
+              <button class="btn btn-muted btn-sm" onclick="relayCommand('/disconnect')">/disconnect</button>
+              <button class="btn btn-muted btn-sm" onclick="clearMessages()">Clear</button>
+            </div>
+          </div>
+
+          <!-- Message Ledger -->
+          <div class="messages-container" id="messagesContainer">
+            <div class="msg-bubble msg-action">
+              [SYSTEM] Live Web3 Chat Console initialized. Polling host node...
+            </div>
+          </div>
+
+          <!-- Quick Slash Command Chips -->
+          <div class="quick-chips">
+            <span class="chip" onclick="setCommand('/scan')">/scan</span>
+            <span class="chip" onclick="setCommand('/peers')">/peers</span>
+            <span class="chip" onclick="setCommand('/all ')">/all &lt;msg&gt;</span>
+            <span class="chip" onclick="setCommand('/whois')">/whois</span>
+            <span class="chip" onclick="setCommand('/nick ')">/nick &lt;name&gt;</span>
+            <span class="chip" onclick="setCommand('/history 20')">/history</span>
+            <span class="chip" onclick="setCommand('/version')">/version</span>
+          </div>
+
+          <!-- Input Bar -->
+          <div class="chat-input-bar">
+            <input type="text" id="chatInput" class="chat-input" placeholder="Type a message or slash command (/scan, /peers, /all, /nick...)..." autocomplete="off" onkeydown="if(event.key==='Enter') handleSend()">
+            <button class="btn btn-accent" id="sendBtn" onclick="handleSend()">Send</button>
+          </div>
+        </section>
+
+      </div>
+
+    </div>
+
+    <!-- TAB 2: DOWNLOADS & DOCUMENTATION -->
+    <div id="tab-downloads" class="tab-content">
+      <div class="doc-section">
+        <div>
+          <h2>Direct Node Downloads &amp; Platform Installers</h2>
+          <p style="color:var(--muted); margin-top:4px;">Deploy girchat / shnet on any Android device, Linux server, macOS workstation, or cloud instance.</p>
+        </div>
+
+        <div class="card">
+          <h3>Direct GitHub Installer (Recommended)</h3>
+          <p style="color:var(--muted); font-size:0.85rem;">One-line auto installer with architecture detection (musl-static binary on Linux/Termux, native C compile on macOS, zero-dependency Python fallback):</p>
+          <div class="copy-box">
+            <input type="text" id="installCmd" class="copy-input" readonly value="curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash" onclick="this.select()">
+            <button class="btn btn-green btn-sm" onclick="copyText('installCmd')">Copy Command</button>
+            <a class="btn btn-muted btn-sm" href="install.sh" download>Download Script</a>
+          </div>
+          <pre><code>curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash</code></pre>
+        </div>
+
+        <h3>Binary Packages</h3>
+        <div class="grid">
+          <div class="card">
+            <div>
+              <h3>Native Static Binary <span class="badge badge-v6">194 KB</span></h3>
+              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">100% static musl build. Zero external dynamic dependencies, no glibc requirements. Runs directly in Termux and Linux aarch64.</p>
+            </div>
+            <a class="btn btn-green" href="girchat" download>Download girchat (194 KB)</a>
+          </div>
+
+          <div class="card">
+            <div>
+              <h3>Pure Python 3 <span class="badge" style="color:var(--purple); border-color:var(--purple);">87 KB</span></h3>
+              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">Single-file pure Python 3 implementation with dual-stack IPv6 socket mesh and zero pip dependencies.</p>
+            </div>
+            <a class="btn btn-accent" href="girchat.py" download>Download girchat.py (87 KB)</a>
+          </div>
+
+          <div class="card">
+            <div>
+              <h3>Java Fat JAR <span class="badge" style="color:var(--muted); border-color:var(--border);">1.4 MB</span></h3>
+              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">Standalone runnable JAR for Java 17+ environments.</p>
+            </div>
+            <a class="btn btn-muted" href="girchat.jar" download>Download girchat.jar (1.4 MB)</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Dual-Stack IPv6 Peer Mesh Quickstart</h3>
+          <pre><code># 1. Start daemon on port 8723:
+girchat -p 8723 -n rei
+
+# 2. Connect directly to peer:
+girchat http://[2409:4055:2db3:b379::d4]:8723 -n alice
+
+# 3. Inside chat, discover local peers:
+/scan
+/peers
+/switch 1</code></pre>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- QR Code Modal -->
+  <div id="qrModal" class="modal-overlay" onclick="if(event.target===this) toggleQrModal()">
+    <div class="modal">
+      <div class="modal-title">Pairing QR Code</div>
+      <img src="media/girchat_node_qr.png" alt="Node QR" class="qr-img" onerror="this.src='/media/girchat_node_qr.png'">
+      <div style="font-family:var(--mono); font-size:0.75rem; color:var(--muted); text-align:center; word-break:break-all;" id="qrUrlLabel">
+        http://[2409:4055:2db3:b379::d4]:8723/
+      </div>
+      <button class="btn btn-muted btn-sm" onclick="toggleQrModal()">Close</button>
+    </div>
+  </div>
+
+  <script>
+    // Configuration
+    let HOST_URL = "";
+    if (window.location.protocol.startsWith("http")) {
+      // If opened on port 8080 or port 8723:
+      HOST_URL = window.location.origin;
+    } else {
+      HOST_URL = "http://127.0.0.1:8723";
+    }
+
+    // If served from 8080, prefer chatting with daemon on 8723 if reachable
+    let API_BASE = HOST_URL;
+    if (window.location.port === "8080") {
+      // Set default target to 8723 on same hostname
+      API_BASE = `${window.location.protocol}//${window.location.hostname}:8723`;
+    }
+    document.getElementById("customHostInput").value = API_BASE;
+
+    let localNick = "rei";
+    let activePeer = "";
+    let lastRenderedCount = 0;
+    let isUserScrolledUp = false;
+
+    // Detect user scroll in messages container
+    const msgContainer = document.getElementById("messagesContainer");
+    msgContainer.addEventListener("scroll", () => {
+      const atBottom = msgContainer.scrollHeight - msgContainer.scrollTop - msgContainer.clientHeight < 40;
+      isUserScrolledUp = !atBottom;
+    });
+
+    function switchTab(tab) {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+      if (tab === "chat") {
+        document.querySelector(".tab-btn:first-child").classList.add("active");
+        document.getElementById("tab-chat").classList.add("active");
+      } else {
+        document.querySelector(".tab-btn:last-child").classList.add("active");
+        document.getElementById("tab-downloads").classList.add("active");
+      }
+    }
+
+    function toggleQrModal() {
+      const modal = document.getElementById("qrModal");
+      modal.classList.toggle("open");
+    }
+
+    function applyCustomHost() {
+      let val = document.getElementById("customHostInput").value.trim();
+      if (!val.startsWith("http://") && !val.startsWith("https://")) {
+        val = "http://" + val;
+      }
+      API_BASE = val.replace(/\/+$/, "");
+      document.getElementById("customHostInput").value = API_BASE;
+      addSystemMsg(`Switched Node Host API to ${API_BASE}`);
+      fetchState();
+      fetchHistory();
+    }
+
+    function copyText(id) {
+      const el = document.getElementById(id);
+      el.select();
+      navigator.clipboard.writeText(el.value).then(() => {
+        alert("Copied to clipboard!");
+      });
+    }
+
+    function setCommand(cmd) {
+      const input = document.getElementById("chatInput");
+      input.value = cmd;
+      input.focus();
+    }
+
+    function addSystemMsg(text) {
+      const div = document.createElement("div");
+      div.className = "msg-bubble msg-action";
+      div.innerText = `[INFO] ${text}`;
+      msgContainer.appendChild(div);
+      if (!isUserScrolledUp) msgContainer.scrollTop = msgContainer.scrollHeight;
+    }
+
+    // Fetch Node State & Peers
+    async function fetchState() {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/state`, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        
+        if (data.name) {
+          localNick = data.name;
+          document.getElementById("nodeName").innerText = localNick;
+        }
+        if (data.primary_url) {
+          document.getElementById("nodeEndpoint").innerText = data.primary_url;
+          document.getElementById("qrUrlLabel").innerText = data.primary_url;
+        }
+        
+        activePeer = data.active_peer || "";
+        const targetLabel = document.getElementById("activePeerTarget");
+        if (activePeer) {
+          const pName = data.active_peer_name || "peer";
+          targetLabel.innerText = `${pName} @ ${activePeer}`;
+        } else {
+          targetLabel.innerText = "No Active Peer";
+        }
+
+        // Render Peers List
+        renderPeers(data.peers || []);
+      } catch (err) {
+        // Try fallback to /api/chat/info
+        try {
+          const resInfo = await fetch(`${API_BASE}/api/chat/info`, { signal: AbortSignal.timeout(2000) });
+          if (resInfo.ok) {
+            const info = await resInfo.json();
+            if (info.name) document.getElementById("nodeName").innerText = info.name;
+          }
+        } catch (_) {}
+      }
+    }
+
+    function renderPeers(peers) {
+      const list = document.getElementById("peerList");
+      document.getElementById("peerCount").innerText = peers.length;
+      if (peers.length === 0) {
+        list.innerHTML = `<li style="color:var(--muted); font-size:0.8rem; text-align:center; padding:20px 0;">No peers discovered yet.<br>Click "Scan Subnet" or connect below.</li>`;
+        return;
+      }
+
+      list.innerHTML = "";
+      peers.forEach(p => {
+        const li = document.createElement("li");
+        li.className = `peer-card ${p.active ? 'active' : ''}`;
+        li.onclick = () => switchToPeer(p.index);
+
+        li.innerHTML = `
+          <div class="peer-header">
+            <span class="peer-name">[${p.index}] ${escapeHtml(p.name || 'peer')}</span>
+            <span class="peer-status ${p.online ? 'online' : 'offline'}">${p.online ? 'ONLINE' : 'OFFLINE'}</span>
+          </div>
+          <div class="peer-url">${escapeHtml(p.url)}</div>
+        `;
+        list.appendChild(li);
+      });
+    }
+
+    async function switchToPeer(idx) {
+      await relayCommand(`/peer ${idx}`);
+    }
+
+    async function connectToPeer() {
+      const input = document.getElementById("newPeerUrl");
+      const url = input.value.trim();
+      if (!url) return;
+      input.value = "";
+      await relayCommand(`/peer ${url}`);
+    }
+
+    // Fetch Chat History
+    async function fetchHistory() {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/history?limit=60`, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) return;
+        const messages = await res.json();
+        if (!Array.isArray(messages)) return;
+
+        if (messages.length !== lastRenderedCount) {
+          renderMessages(messages);
+          lastRenderedCount = messages.length;
+        }
+      } catch (err) {
+        // Silently retry on next tick
+      }
+    }
+
+    function renderMessages(messages) {
+      msgContainer.innerHTML = "";
+      if (messages.length === 0) {
+        msgContainer.innerHTML = `<div class="msg-bubble msg-action">[SYSTEM] No chat messages yet. Send a message to start!</div>`;
+        return;
+      }
+
+      messages.forEach(m => {
+        const bubble = document.createElement("div");
+        const isOut = (m.direction === "OUT");
+        const isAction = m.text && m.text.startsWith("/me ");
+
+        if (isAction) {
+          bubble.className = "msg-bubble msg-action";
+          const actionText = m.text.slice(4);
+          const senderName = isOut ? localNick : (m.sender || "peer");
+          bubble.innerText = `* ${senderName} ${actionText}`;
+        } else {
+          bubble.className = `msg-bubble ${isOut ? 'msg-out' : 'msg-in'}`;
+          
+          let timeStr = "";
+          if (m.timestamp) {
+            const d = new Date(m.timestamp);
+            timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          }
+
+          bubble.innerHTML = `
+            <div class="msg-meta">
+              <span class="msg-sender">${escapeHtml(isOut ? localNick : (m.sender || 'peer'))}</span>
+              <span>${timeStr}</span>
+            </div>
+            <div class="msg-text">${escapeHtml(m.text || '')}</div>
+          `;
+        }
+        msgContainer.appendChild(bubble);
+      });
+
+      if (!isUserScrolledUp) {
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+      }
+    }
+
+    function clearMessages() {
+      msgContainer.innerHTML = `<div class="msg-bubble msg-action">[SYSTEM] Console display cleared.</div>`;
+      lastRenderedCount = 0;
+    }
+
+    // Relay Commands or Messages
+    async function handleSend() {
+      const input = document.getElementById("chatInput");
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+
+      if (text.startsWith("/")) {
+        await relayCommand(text);
+      } else {
+        await sendMessage(text);
+      }
+    }
+
+    async function relayCommand(cmd) {
+      addSystemMsg(`Relaying: ${cmd}`);
+      try {
+        const res = await fetch(`${API_BASE}/api/relay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cmd: cmd })
+        });
+        const data = await res.json();
+        if (data.message) {
+          addSystemMsg(data.message);
+        }
+        await fetchState();
+        await fetchHistory();
+      } catch (err) {
+        addSystemMsg(`Relay failed: ${err.message}. Trying direct command dispatch.`);
+      }
+    }
+
+    async function sendMessage(text) {
+      try {
+        const res = await fetch(`${API_BASE}/api/relay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text })
+        });
+        const data = await res.json();
+        if (data.status === "error") {
+          addSystemMsg(`Send error: ${data.message}`);
+        }
+        await fetchHistory();
+      } catch (err) {
+        // Fallback: try posting directly to active peer or local node /api/chat/message
+        try {
+          const res2 = await fetch(`${API_BASE}/api/chat/message`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sender: localNick,
+              text: text,
+              reply_port: 8723
+            })
+          });
+          if (res2.ok) {
+            addSystemMsg(`Delivered via direct /api/chat/message`);
+            await fetchHistory();
+            return;
+          }
+        } catch (_) {}
+        addSystemMsg(`Message delivery failed: ${err.message}`);
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    // Auto-polling loop
+    fetchState();
+    fetchHistory();
+    setInterval(() => {
+      fetchHistory();
+    }, 1200);
+    setInterval(() => {
+      fetchState();
+    }, 4000);
+  </script>
+</body>
+</html>
