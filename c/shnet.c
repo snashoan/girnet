@@ -28,7 +28,7 @@
 
 #include "qrcodegen.h"
 
-#define GIRCHAT_VERSION "1.0.0"
+#define GIRCHAT_VERSION "1.1.0"
 #define DEFAULT_PORT 8723
 
 // ANSI 256-color definitions
@@ -59,6 +59,7 @@ static volatile bool g_running = true;
 typedef struct {
     char url[256];
     char name[128];
+    char version[32];
     time_t last_seen;
     bool online;
 } PeerNode;
@@ -590,7 +591,7 @@ static ssize_t read_http_response(int sock, char *buf, size_t max_len) {
     return total;
 }
 
-static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
+static bool ping_peer(const char *peer, char *out_name, size_t out_len, char *out_ver, size_t out_ver_len) {
     char host[256] = "";
     int port = DEFAULT_PORT;
     parse_host_port(peer, host, &port);
@@ -603,8 +604,8 @@ static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
 
     char request[512];
     snprintf(request, sizeof(request),
-             "GET /api/chat/info HTTP/1.1\r\nHost: %s\r\nUser-Agent: girchat-c/1.0.0\r\nConnection: close\r\n\r\n",
-             host_hdr);
+             "GET /api/chat/info HTTP/1.1\r\nHost: %s\r\nUser-Agent: girchat-c/%s\r\nConnection: close\r\n\r\n",
+             host_hdr, GIRCHAT_VERSION);
     safe_write(sock, request, strlen(request));
 
     char response[2048];
@@ -615,9 +616,14 @@ static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
         response[n] = '\0';
         if (strstr(response, "200 OK")) {
             char *body = strstr(response, "\r\n\r\n");
-            if (body && out_name && out_len > 0) {
+            if (body) {
                 body += 4;
-                extract_json_str(body, "name", out_name, out_len);
+                if (out_name && out_len > 0) {
+                    extract_json_str(body, "name", out_name, out_len);
+                }
+                if (out_ver && out_ver_len > 0) {
+                    extract_json_str(body, "version", out_ver, out_ver_len);
+                }
             }
             return true;
         }
@@ -625,7 +631,9 @@ static bool ping_peer(const char *peer, char *out_name, size_t out_len) {
     return false;
 }
 
-static bool send_connect(const char *peer, const char *local_name, int local_port, char *out_peer_name, size_t out_name_len) {
+static bool send_connect(const char *peer, const char *local_name, int local_port,
+                        char *out_peer_name, size_t out_name_len,
+                        char *out_ver, size_t out_ver_len) {
     char host[256] = "";
     int port = DEFAULT_PORT;
     parse_host_port(peer, host, &port);
@@ -641,8 +649,8 @@ static bool send_connect(const char *peer, const char *local_name, int local_por
 
     char json_body[512];
     snprintf(json_body, sizeof(json_body),
-             "{\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\"}",
-             local_name, local_port, primary_url);
+             "{\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\",\"version\":\"%s\"}",
+             local_name, local_port, primary_url, GIRCHAT_VERSION);
 
     char request[1024];
     snprintf(request, sizeof(request),
@@ -663,9 +671,14 @@ static bool send_connect(const char *peer, const char *local_name, int local_por
         response[n] = '\0';
         if (strstr(response, "200 OK")) {
             char *body = strstr(response, "\r\n\r\n");
-            if (body && out_peer_name && out_name_len > 0) {
+            if (body) {
                 body += 4;
-                extract_json_str(body, "name", out_peer_name, out_name_len);
+                if (out_peer_name && out_name_len > 0) {
+                    extract_json_str(body, "name", out_peer_name, out_name_len);
+                }
+                if (out_ver && out_ver_len > 0) {
+                    extract_json_str(body, "version", out_ver, out_ver_len);
+                }
             }
             return true;
         }
@@ -721,8 +734,8 @@ static bool send_http_message(const char *peer, const char *sender, const char *
     char id[64];
     snprintf(id, sizeof(id), "%lld-c%04x", (long long)time(NULL) * 1000, rand() & 0xFFFF);
     snprintf(json_body, sizeof(json_body),
-             "{\"id\":\"%s\",\"sender\":\"%s\",\"peer\":\"%s\",\"text\":\"%s\",\"reply_port\":%d}",
-             id, sender, peer, esc_text, reply_port);
+             "{\"id\":\"%s\",\"sender\":\"%s\",\"peer\":\"%s\",\"text\":\"%s\",\"reply_port\":%d,\"version\":\"%s\"}",
+             id, sender, peer, esc_text, reply_port, GIRCHAT_VERSION);
 
     char request[6000];
     snprintf(request, sizeof(request),
@@ -803,7 +816,7 @@ static int peer_find_locked(const char *target) {
     return -1;
 }
 
-static int peer_upsert_locked(const char *url, const char *name, bool set_active_if_none) {
+static int peer_upsert_locked(const char *url, const char *name, const char *ver, bool set_active_if_none) {
     if (!url || !url[0]) return -1;
     char norm[256];
     normalize_peer_url(url, norm, sizeof(norm));
@@ -835,9 +848,17 @@ static int peer_upsert_locked(const char *url, const char *name, bool set_active
         } else {
             safe_strncpy(g_peers[idx].name, "peer", sizeof(g_peers[idx].name));
         }
+        if (ver && ver[0]) {
+            safe_strncpy(g_peers[idx].version, ver, sizeof(g_peers[idx].version));
+        } else {
+            g_peers[idx].version[0] = '\0';
+        }
     } else {
         if (name && name[0] && strcmp(name, "peer") != 0 && strcmp(name, "anonymous") != 0) {
             safe_strncpy(g_peers[idx].name, name, sizeof(g_peers[idx].name));
+        }
+        if (ver && ver[0]) {
+            safe_strncpy(g_peers[idx].version, ver, sizeof(g_peers[idx].version));
         }
     }
 
@@ -862,7 +883,7 @@ static bool peer_switch_locked(int idx) {
     return true;
 }
 
-static bool peer_replace_locked(int old_idx, const char *new_url, const char *new_name) {
+static bool peer_replace_locked(int old_idx, const char *new_url, const char *new_name, const char *new_ver) {
     if (old_idx < 0 || old_idx >= g_peer_count) return false;
     char norm[256];
     normalize_peer_url(new_url, norm, sizeof(norm));
@@ -871,6 +892,11 @@ static bool peer_replace_locked(int old_idx, const char *new_url, const char *ne
         safe_strncpy(g_peers[old_idx].name, new_name, sizeof(g_peers[old_idx].name));
     } else {
         safe_strncpy(g_peers[old_idx].name, "peer", sizeof(g_peers[old_idx].name));
+    }
+    if (new_ver && new_ver[0]) {
+        safe_strncpy(g_peers[old_idx].version, new_ver, sizeof(g_peers[old_idx].version));
+    } else {
+        g_peers[old_idx].version[0] = '\0';
     }
     g_peers[old_idx].last_seen = time(NULL);
     g_peers[old_idx].online = true;
@@ -891,19 +917,20 @@ static void print_peers_table(void) {
         return;
     }
 
-    printf("  #   STATUS    NAME             ENDPOINT\n");
+    printf("  #   STATUS    VER       NAME             ENDPOINT\n");
     for (int i = 0; i < g_peer_count; i++) {
         char marker = (i == g_active_peer_idx) ? '*' : ' ';
         const char *active_tag = (i == g_active_peer_idx) ? " (ACTIVE)" : "";
         const char *status_str = g_peers[i].online ? "online" : "offline";
+        const char *ver_str = g_peers[i].version[0] ? g_peers[i].version : "-";
         char dname[128];
         format_peer_display_name(g_peers[i].name, dname, sizeof(dname));
 
-        printf("%c [%d] [%-7s] %-16s %s%s\n",
-               marker, i + 1, status_str, dname, g_peers[i].url, active_tag);
+        printf("%c [%d] [%-7s] %-9s %-16s %s%s\n",
+               marker, i + 1, status_str, ver_str, dname, g_peers[i].url, active_tag);
     }
     pthread_mutex_unlock(&g_peer_mutex);
-    printf("\nCommands: /peer <#> (switch), /scan (discover), /replace <#> <url>, /all <msg>\n");
+    printf("\nCommands: /peer <#> (switch), /scan (discover), /replace <#> <url>, /all <msg>, /version\n");
 }
 
 static void load_history_peers(void) {
@@ -922,7 +949,7 @@ static void load_history_peers(void) {
 
         if (peer[0] && strcmp(peer, "peer") != 0 && (strncmp(peer, "http://", 7) == 0 || strncmp(peer, "https://", 8) == 0 || strchr(peer, ':'))) {
             const char *name = (strcmp(dir, "IN") == 0 && sender[0]) ? sender : "peer";
-            int idx = peer_upsert_locked(peer, name, false);
+            int idx = peer_upsert_locked(peer, name, NULL, false);
             g_peers[idx].online = false;
         }
     }
@@ -942,11 +969,13 @@ static int scan_network(int target_port) {
         char test_url[64];
         snprintf(test_url, sizeof(test_url), "http://127.0.0.1:%d", p);
         char node_name[128] = "";
-        if (ping_peer(test_url, node_name, sizeof(node_name))) {
+        char node_ver[64] = "";
+        if (ping_peer(test_url, node_name, sizeof(node_name), node_ver, sizeof(node_ver))) {
             pthread_mutex_lock(&g_peer_mutex);
-            int idx = peer_upsert_locked(test_url, node_name, false);
+            int idx = peer_upsert_locked(test_url, node_name, node_ver, false);
             pthread_mutex_unlock(&g_peer_mutex);
-            printf("    [FOUND] [%d] %-14s %s\n", idx + 1, node_name[0] ? node_name : "node", test_url);
+            const char *vdisplay = node_ver[0] ? node_ver : "-";
+            printf("    [FOUND] [%d] %-14s (v%-5s) %s\n", idx + 1, node_name[0] ? node_name : "node", vdisplay, test_url);
             found++;
         }
     }
@@ -1005,11 +1034,13 @@ static int scan_network(int target_port) {
                             char test_url[256];
                             snprintf(test_url, sizeof(test_url), "http://%.64s:%d", ip_map[i], target_port);
                             char node_name[128] = "";
-                            ping_peer(test_url, node_name, sizeof(node_name));
+                            char node_ver[64] = "";
+                            ping_peer(test_url, node_name, sizeof(node_name), node_ver, sizeof(node_ver));
                             pthread_mutex_lock(&g_peer_mutex);
-                            int idx = peer_upsert_locked(test_url, node_name, false);
+                            int idx = peer_upsert_locked(test_url, node_name, node_ver, false);
                             pthread_mutex_unlock(&g_peer_mutex);
-                            printf("    [FOUND] [%d] %-14s %s\n", idx + 1, node_name[0] ? node_name : "node", test_url);
+                            const char *vdisplay = node_ver[0] ? node_ver : "-";
+                            printf("    [FOUND] [%d] %-14s (v%-5s) %s\n", idx + 1, node_name[0] ? node_name : "node", vdisplay, test_url);
                             found++;
                         }
                     }
@@ -1284,9 +1315,11 @@ static void *handle_client(void *arg) {
         char name[128] = "anonymous";
         char port_str[32] = "";
         char internet_url[256] = "";
+        char peer_ver[32] = "";
         extract_json_str(body, "name", name, sizeof(name));
         extract_json_str(body, "port", port_str, sizeof(port_str));
         extract_json_str(body, "internet_url", internet_url, sizeof(internet_url));
+        extract_json_str(body, "version", peer_ver, sizeof(peer_ver));
         int c_port = atoi(port_str);
         if (c_port <= 0) c_port = DEFAULT_PORT;
 
@@ -1308,7 +1341,7 @@ static void *handle_client(void *arg) {
         }
 
         pthread_mutex_lock(&g_peer_mutex);
-        int p_idx = peer_upsert_locked(peer_url, name, true);
+        int p_idx = peer_upsert_locked(peer_url, name, peer_ver, true);
         pthread_mutex_unlock(&g_peer_mutex);
 
         char dname[128];
@@ -1321,8 +1354,8 @@ static void *handle_client(void *arg) {
 
         char resp_body[512];
         snprintf(resp_body, sizeof(resp_body),
-                 "{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\"}",
-                 g_local_name, g_local_port, primary_url);
+                 "{\"status\":\"connected\",\"name\":\"%s\",\"port\":%d,\"internet_url\":\"%s\",\"version\":\"%s\"}",
+                 g_local_name, g_local_port, primary_url, GIRCHAT_VERSION);
         char resp[768];
         snprintf(resp, sizeof(resp),
                  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
@@ -1346,11 +1379,12 @@ static void *handle_client(void *arg) {
         const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"status\":\"disconnected\"}";
         safe_write(client_sock, resp, strlen(resp));
     } else if (strncmp(buffer, "POST /api/chat/message", 22) == 0) {
-        char sender[128] = "anonymous", text[4096] = "", id[64] = "", r_port[32] = "";
+        char sender[128] = "anonymous", text[4096] = "", id[64] = "", r_port[32] = "", sender_ver[32] = "";
         extract_json_str(body, "sender", sender, sizeof(sender));
         extract_json_str(body, "text", text, sizeof(text));
         extract_json_str(body, "id", id, sizeof(id));
         extract_json_str(body, "reply_port", r_port, sizeof(r_port));
+        extract_json_str(body, "version", sender_ver, sizeof(sender_ver));
         if (!id[0]) snprintf(id, sizeof(id), "%lld-in", (long long)time(NULL)*1000);
 
         int rp = atoi(r_port);
@@ -1368,7 +1402,7 @@ static void *handle_client(void *arg) {
         }
 
         pthread_mutex_lock(&g_peer_mutex);
-        peer_upsert_locked(sender_url, sender, false);
+        peer_upsert_locked(sender_url, sender, sender_ver, false);
         char current_active[256];
         strncpy(current_active, g_active_peer[0] ? g_active_peer : sender_url, sizeof(current_active) - 1);
         current_active[sizeof(current_active) - 1] = '\0';
@@ -1565,6 +1599,8 @@ static void print_chat_help(void) {
     printf("  /replace <#> <url>    replace a peer slot with a new address\n");
     printf("  /all <message>        broadcast message to all online peers\n");
     printf("  /disconnect [target]  disconnect peer without affecting others\n");
+    printf("  /version, /ver        show version & build details\n");
+    printf("  /check [target]       check remote node or binary server version\n");
     printf("  /nick <name>          set persistent nickname\n");
     printf("  /me <action>          send action message\n");
     printf("  /whois                show active peer and connection info\n");
@@ -1580,16 +1616,18 @@ static void print_whois(void) {
     char primary_url[128];
     get_primary_url(g_local_port, primary_url, sizeof(primary_url));
     printf("[WHOIS]\n");
-    printf("  local:    %s (port %d)\n", g_local_name, g_local_port);
+    printf("  local:    %s (port %d, v%s)\n", g_local_name, g_local_port, GIRCHAT_VERSION);
     printf("  endpoint: %s\n", primary_url);
 
     pthread_mutex_lock(&g_peer_mutex);
     if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
         char dname[128];
         format_peer_display_name(g_peers[g_active_peer_idx].name, dname, sizeof(dname));
-        printf("  active:   [%d] %s (%s) - %s\n",
+        const char *pver = g_peers[g_active_peer_idx].version[0] ? g_peers[g_active_peer_idx].version : "unknown";
+        printf("  active:   [%d] %s (%s, v%s) - %s\n",
                g_active_peer_idx + 1, dname,
                g_peers[g_active_peer_idx].url,
+               pver,
                g_peers[g_active_peer_idx].online ? "online" : "offline");
     } else if (g_active_peer[0]) {
         printf("  active:   %s\n", g_active_peer);
@@ -1600,6 +1638,170 @@ static void print_whois(void) {
     pthread_mutex_unlock(&g_peer_mutex);
 }
 
+static void check_version_remote(const char *target) {
+    char target_buf[256] = "";
+    if (!target || !target[0]) {
+        pthread_mutex_lock(&g_peer_mutex);
+        if (g_active_peer[0]) {
+            safe_strncpy(target_buf, g_active_peer, sizeof(target_buf));
+        } else if (g_peer_count > 0) {
+            safe_strncpy(target_buf, g_peers[0].url, sizeof(target_buf));
+        } else {
+            safe_strncpy(target_buf, "http://127.0.0.1:8723", sizeof(target_buf));
+        }
+        pthread_mutex_unlock(&g_peer_mutex);
+        target = target_buf;
+    }
+
+    char norm[256];
+    normalize_peer_url(target, norm, sizeof(norm));
+    printf("[VERSION CHECK] Target: %s\n", norm);
+
+    char name[128] = "";
+    char ver[64] = "";
+    if (ping_peer(norm, name, sizeof(name), ver, sizeof(ver))) {
+        char dname[128];
+        format_peer_display_name(name, dname, sizeof(dname));
+        printf("  Node Name:       %s\n", dname);
+        printf("  Remote Version:  v%s\n", ver[0] ? ver : "1.0.0 (or legacy)");
+        printf("  Local Version:   v%s\n", GIRCHAT_VERSION);
+        if (ver[0] && strcmp(ver, GIRCHAT_VERSION) == 0) {
+            printf("  Status:          MATCH (Both nodes are running v%s)\n", GIRCHAT_VERSION);
+        } else if (ver[0]) {
+            printf("  Status:          MISMATCH (Remote v%s != Local v%s)\n", ver, GIRCHAT_VERSION);
+        } else {
+            printf("  Status:          ONLINE (Target did not report explicit version)\n");
+        }
+        return;
+    }
+
+    // Try download server HEAD check
+    char host[256] = "";
+    int port = 8080;
+    parse_host_port(norm, host, &port);
+    int sock = connect_to_host(host, port, 3);
+    if (sock >= 0) {
+        char req[512];
+        snprintf(req, sizeof(req),
+                 "HEAD /girchat HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n",
+                 host, port);
+        safe_write(sock, req, strlen(req));
+        char resp[2048];
+        ssize_t n = read_http_response(sock, resp, sizeof(resp));
+        close(sock);
+        if (n > 0 && strstr(resp, "200 OK")) {
+            long clen = 0;
+            char *cl = strcasestr(resp, "Content-Length:");
+            if (cl) clen = atol(cl + 15);
+            printf("  Service:         HTTP Download Server (%s:%d)\n", host, port);
+            printf("  Remote Binary:   girchat (%ld bytes)\n", clen);
+            printf("  Local Version:   v%s\n", GIRCHAT_VERSION);
+            printf("  Status:          Update source available (run 'girchat update %s/girchat' to install)\n", norm);
+            return;
+        }
+    }
+
+    printf("  Status:          UNREACHABLE (Failed to connect to %s)\n", norm);
+}
+
+static int update_binary_from_url(const char *url) {
+    if (!url || !url[0]) {
+        printf("Usage: girchat update <http://host:8080/girchat>\n");
+        return 1;
+    }
+    char norm[256];
+    normalize_peer_url(url, norm, sizeof(norm));
+    printf("[UPDATE] Downloading latest binary from %s...\n", norm);
+
+    char host[256] = "";
+    int port = 8080;
+    parse_host_port(norm, host, &port);
+
+    const char *path = strchr(norm + 7, '/');
+    if (!path || !path[0]) path = "/girchat";
+
+    int sock = connect_to_host(host, port, 5);
+    if (sock < 0) {
+        printf("[UPDATE ERROR] Failed to connect to %s:%d\n", host, port);
+        return 1;
+    }
+
+    char req[512];
+    snprintf(req, sizeof(req),
+             "GET %s HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n",
+             path, host, port);
+    safe_write(sock, req, strlen(req));
+
+    char hdr[2048];
+    size_t hdr_len = 0;
+    while (hdr_len < sizeof(hdr) - 1) {
+        char c;
+        ssize_t r = read(sock, &c, 1);
+        if (r <= 0) break;
+        hdr[hdr_len++] = c;
+        if (hdr_len >= 4 && memcmp(hdr + hdr_len - 4, "\r\n\r\n", 4) == 0) break;
+    }
+    hdr[hdr_len] = '\0';
+
+    if (!strstr(hdr, "200 OK")) {
+        close(sock);
+        printf("[UPDATE ERROR] Server returned non-200 response: %.64s\n", hdr);
+        return 1;
+    }
+
+    char self_path[512] = "";
+    ssize_t slen = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+    if (slen > 0) {
+        self_path[slen] = '\0';
+    } else {
+        safe_strncpy(self_path, "./girchat", sizeof(self_path));
+    }
+
+    char tmp_path[560];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.update.tmp", self_path);
+    FILE *out = fopen(tmp_path, "wb");
+    if (!out) {
+        close(sock);
+        printf("[UPDATE ERROR] Cannot open %s for writing\n", tmp_path);
+        return 1;
+    }
+
+    char buf[8192];
+    ssize_t bytes;
+    size_t total = 0;
+    while ((bytes = read(sock, buf, sizeof(buf))) > 0) {
+        fwrite(buf, 1, bytes, out);
+        total += bytes;
+    }
+    fclose(out);
+    close(sock);
+
+    if (total < 1000) {
+        unlink(tmp_path);
+        printf("[UPDATE ERROR] Downloaded file too small (%zu bytes), update aborted\n", total);
+        return 1;
+    }
+
+    chmod(tmp_path, 0755);
+    unlink(self_path);
+    if (rename(tmp_path, self_path) != 0) {
+        FILE *src = fopen(tmp_path, "rb");
+        FILE *dst = fopen(self_path, "wb");
+        if (src && dst) {
+            while ((bytes = fread(buf, 1, sizeof(buf), src)) > 0) {
+                fwrite(buf, 1, bytes, dst);
+            }
+        }
+        if (src) fclose(src);
+        if (dst) fclose(dst);
+        chmod(self_path, 0755);
+        unlink(tmp_path);
+    }
+
+    printf("[UPDATE SUCCESS] Updated %s (%zu bytes). Please restart girchat.\n", self_path, total);
+    return 0;
+}
+
 static void run_chat_repl(const char *initial_peer, int preferred_port, const char *cli_name) {
     resolve_nickname(cli_name, g_local_name, sizeof(g_local_name));
 
@@ -1607,7 +1809,7 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
 
     if (initial_peer && initial_peer[0]) {
         pthread_mutex_lock(&g_peer_mutex);
-        int idx = peer_upsert_locked(initial_peer, NULL, true);
+        int idx = peer_upsert_locked(initial_peer, NULL, NULL, true);
         peer_switch_locked(idx);
         pthread_mutex_unlock(&g_peer_mutex);
         g_is_host = false;
@@ -1652,29 +1854,32 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     }
     pthread_mutex_unlock(&g_peer_mutex);
 
-    printf("commands: /peers /peer /scan /all /replace /disconnect /whois /history /qr /exit\n\n");
+    printf("commands: /peers /peer /scan /all /replace /disconnect /whois /version /check /history /qr /exit\n\n");
 
     if (g_active_peer[0]) {
-        if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name))) {
+        char peer_ver[32] = "";
+        if (send_connect(g_active_peer, g_local_name, g_local_port, g_peer_name, sizeof(g_peer_name), peer_ver, sizeof(peer_ver))) {
             pthread_mutex_lock(&g_peer_mutex);
             if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
                 safe_strncpy(g_peers[g_active_peer_idx].name, g_peer_name, sizeof(g_peers[g_active_peer_idx].name));
+                if (peer_ver[0]) safe_strncpy(g_peers[g_active_peer_idx].version, peer_ver, sizeof(g_peers[g_active_peer_idx].version));
                 g_peers[g_active_peer_idx].online = true;
             }
             pthread_mutex_unlock(&g_peer_mutex);
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
-            printf("[CONNECT] %s <%s>\n", g_active_peer, dname);
-        } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name))) {
+            printf("[CONNECT] %s <%s> (v%s)\n", g_active_peer, dname, peer_ver[0] ? peer_ver : "-");
+        } else if (ping_peer(g_active_peer, g_peer_name, sizeof(g_peer_name), peer_ver, sizeof(peer_ver))) {
             pthread_mutex_lock(&g_peer_mutex);
             if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
                 safe_strncpy(g_peers[g_active_peer_idx].name, g_peer_name, sizeof(g_peers[g_active_peer_idx].name));
+                if (peer_ver[0]) safe_strncpy(g_peers[g_active_peer_idx].version, peer_ver, sizeof(g_peers[g_active_peer_idx].version));
                 g_peers[g_active_peer_idx].online = true;
             }
             pthread_mutex_unlock(&g_peer_mutex);
             char dname[128];
             format_peer_display_name(g_peer_name, dname, sizeof(dname));
-            printf("[ONLINE] %s <%s>\n", g_active_peer, dname);
+            printf("[ONLINE] %s <%s> (v%s)\n", g_active_peer, dname, peer_ver[0] ? peer_ver : "-");
         } else {
             printf("[OFFLINE] %s\n", g_active_peer);
         }
@@ -1726,25 +1931,26 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                     char norm[256];
                     normalize_peer_url(tgt, norm, sizeof(norm));
                     char remote_name[128] = "";
-                    if (send_connect(norm, g_local_name, g_local_port, remote_name, sizeof(remote_name))) {
+                    char remote_ver[64] = "";
+                    if (send_connect(norm, g_local_name, g_local_port, remote_name, sizeof(remote_name), remote_ver, sizeof(remote_ver))) {
                         pthread_mutex_lock(&g_peer_mutex);
-                        int n_idx = peer_upsert_locked(norm, remote_name, false);
+                        int n_idx = peer_upsert_locked(norm, remote_name, remote_ver, false);
                         peer_switch_locked(n_idx);
                         pthread_mutex_unlock(&g_peer_mutex);
                         char dname[128];
                         format_peer_display_name(remote_name, dname, sizeof(dname));
-                        printf("[CONNECT] Connected & switched to [%d] %s <%s>\n", n_idx + 1, norm, dname);
-                    } else if (ping_peer(norm, remote_name, sizeof(remote_name))) {
+                        printf("[CONNECT] Connected & switched to [%d] %s <%s> (v%s)\n", n_idx + 1, norm, dname, remote_ver[0] ? remote_ver : "-");
+                    } else if (ping_peer(norm, remote_name, sizeof(remote_name), remote_ver, sizeof(remote_ver))) {
                         pthread_mutex_lock(&g_peer_mutex);
-                        int n_idx = peer_upsert_locked(norm, remote_name, false);
+                        int n_idx = peer_upsert_locked(norm, remote_name, remote_ver, false);
                         peer_switch_locked(n_idx);
                         pthread_mutex_unlock(&g_peer_mutex);
                         char dname[128];
                         format_peer_display_name(remote_name, dname, sizeof(dname));
-                        printf("[ONLINE] Added & switched to [%d] %s <%s>\n", n_idx + 1, norm, dname);
+                        printf("[ONLINE] Added & switched to [%d] %s <%s> (v%s)\n", n_idx + 1, norm, dname, remote_ver[0] ? remote_ver : "-");
                     } else {
                         pthread_mutex_lock(&g_peer_mutex);
-                        int n_idx = peer_upsert_locked(norm, "peer", false);
+                        int n_idx = peer_upsert_locked(norm, "peer", NULL, false);
                         peer_switch_locked(n_idx);
                         pthread_mutex_unlock(&g_peer_mutex);
                         printf("[PEER] Switched to [%d] %s (unreachable/offline)\n", n_idx + 1, norm);
@@ -1774,16 +1980,14 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                         continue;
                     }
                     if (idx >= 0) {
-                        peer_replace_locked(idx, new_url, NULL);
                         pthread_mutex_unlock(&g_peer_mutex);
                         char rem_name[128] = "";
-                        ping_peer(new_url, rem_name, sizeof(rem_name));
+                        char rem_ver[64] = "";
+                        ping_peer(new_url, rem_name, sizeof(rem_name), rem_ver, sizeof(rem_ver));
                         pthread_mutex_lock(&g_peer_mutex);
-                        if (rem_name[0]) {
-                            safe_strncpy(g_peers[idx].name, rem_name, sizeof(g_peers[idx].name));
-                        }
+                        peer_replace_locked(idx, new_url, rem_name, rem_ver);
                         pthread_mutex_unlock(&g_peer_mutex);
-                        printf("[REPLACE] Peer [%d] replaced with %s\n", idx + 1, new_url);
+                        printf("[REPLACE] Peer [%d] replaced with %s (v%s)\n", idx + 1, new_url, rem_ver[0] ? rem_ver : "-");
                     } else {
                         pthread_mutex_unlock(&g_peer_mutex);
                         printf("[ERROR] Peer '%s' not found in peer table\n", target);
@@ -1832,6 +2036,23 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
                     pthread_mutex_unlock(&g_peer_mutex);
                     printf("[DISCONNECT] No active peer to disconnect\n");
                 }
+            } else if (strcmp(line, "/version") == 0 || strcmp(line, "/ver") == 0) {
+                printf("[VERSION]\n");
+                printf("  local binary:  girchat %s (Built %s %s)\n", GIRCHAT_VERSION, __DATE__, __TIME__);
+                printf("  architecture:  Linux aarch64 musl-static\n");
+                pthread_mutex_lock(&g_peer_mutex);
+                if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {
+                    const char *pver = g_peers[g_active_peer_idx].version[0] ? g_peers[g_active_peer_idx].version : "unknown";
+                    printf("  active peer:   [%d] %s (v%s @ %s)\n",
+                           g_active_peer_idx + 1, g_peers[g_active_peer_idx].name, pver, g_peers[g_active_peer_idx].url);
+                } else {
+                    printf("  active peer:   none\n");
+                }
+                pthread_mutex_unlock(&g_peer_mutex);
+            } else if (strncmp(line, "/check", 6) == 0) {
+                const char *tgt = line + 6;
+                while (*tgt == ' ') tgt++;
+                check_version_remote(*tgt ? tgt : NULL);
             } else if (strcmp(line, "/whois") == 0) {
                 print_whois();
             } else if (strcmp(line, "/info") == 0 || strcmp(line, "/status") == 0) {
@@ -1948,27 +2169,47 @@ static void run_serve(const char *dir, int preferred_port, bool show_qr) {
 
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
-    if (argc < 2 || strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
-        printf("girchat / shnet (Native C) - Dual-Stack IPv6 Peer Mesh & Node Runtime\n\n"
-               "Usage:\n"
-               "  girchat [peer] [-p port] [-n name]      Interactive CLI chat & peer mesh\n"
-               "  girchat scan [port]                     Scan local network for active nodes\n"
-               "  girchat peers                           List known & registered peers\n"
-               "  shnet chat [peer] [-p port] [-n name]   Interactive CLI chat\n"
-               "  shnet serve [dir] [-p port] [-q]        Serve static files from directory\n"
-               "  shnet send <peer> <message>             Send a one-shot message\n"
-               "  shnet history [peer]                    View stored chat history\n"
-               "  shnet links [-p port]                   Discover IPv6 and IPv4 links\n"
-               "  shnet qr [text]                         Print ANSI QR code\n"
-               "  shnet version                           Show version\n");
+    if (argc < 2) {
+        run_chat_repl(NULL, DEFAULT_PORT, NULL);
         return 0;
     }
 
     const char *cmd = argv[1];
 
-    if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) {
-        printf("girchat version %s (Native C / Linux / Dual-Stack IPv6)\n", GIRCHAT_VERSION);
+    if (strcmp(cmd, "--help") == 0 || strcmp(cmd, "-h") == 0 || strcmp(cmd, "help") == 0) {
+        printf("girchat / shnet (Native C) - Dual-Stack IPv6 Peer Mesh & Node Runtime\n\n"
+               "Usage:\n"
+               "  girchat [peer] [-p port] [-n name]      Interactive CLI chat & peer mesh\n"
+               "  girchat scan [port]                     Scan local network for active nodes\n"
+               "  girchat peers                           List known & registered peers\n"
+               "  girchat check [target]                  Check version of target node or binary server\n"
+               "  girchat update [server_url]             Self-update binary from server URL\n"
+               "  girchat version, -v                     Show version and build info\n"
+               "  shnet chat [peer] [-p port] [-n name]   Interactive CLI chat\n"
+               "  shnet serve [dir] [-p port] [-q]        Serve static files from directory\n"
+               "  shnet send <peer> <message>             Send a one-shot message\n"
+               "  shnet history [peer]                    View stored chat history\n"
+               "  shnet links [-p port]                   Discover IPv6 and IPv4 links\n"
+               "  shnet qr [text]                         Print ANSI QR code\n");
         return 0;
+    }
+
+    if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0 ||
+        strcmp(cmd, "-v") == 0 || strcmp(cmd, "-V") == 0) {
+        printf("girchat version %s (Built %s %s / Linux aarch64 musl-static / Dual-Stack IPv6)\n",
+               GIRCHAT_VERSION, __DATE__, __TIME__);
+        return 0;
+    }
+
+    if (strcmp(cmd, "check") == 0 || strcmp(cmd, "--check") == 0) {
+        const char *target = (argc >= 3) ? argv[2] : NULL;
+        check_version_remote(target);
+        return 0;
+    }
+
+    if (strcmp(cmd, "update") == 0 || strcmp(cmd, "--update") == 0) {
+        const char *url = (argc >= 3) ? argv[2] : "http://192.168.89.60:8080/girchat";
+        return update_binary_from_url(url);
     }
 
     if (strcmp(cmd, "scan") == 0 || strcmp(cmd, "--scan") == 0 || strcmp(cmd, "discover") == 0) {
