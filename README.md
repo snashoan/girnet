@@ -22,8 +22,15 @@ curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | ba
 
 *(On Termux or environments without bash, run with `sh`: `curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | sh`)*
 
-- **Android (Termux) / Linux aarch64**: Automatically installs the prebuilt 100% static musl binary (194 KB, zero dependencies).
-- **x86_64 / Other Architectures**: Compiles natively if `gcc` or `clang` is present, or falls back to the zero-dependency pure Python 3 edition.
+### Platform Strategy:
+- **Android (Termux) / Linux aarch64**: Automatically downloads and installs the prebuilt 100% static musl binary (194 KB, zero dependencies).
+- **macOS / BSD / Linux x86_64**: Automatically builds the high-performance native C binary locally from source using `clang`, `gcc`, or `cc`.
+  - *macOS Note*: If no C compiler is detected, install Xcode Command Line Tools via `xcode-select --install`.
+- **Universal Python 3 Fallback**: If no C compiler is found on non-Linux devices, the installer seamlessly falls back to the zero-dependency pure Python 3 edition so `girchat` runs immediately out of the box.
+- **Force Native C Edition**:
+  ```bash
+  curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash -s -- --c
+  ```
 
 Verify installation:
 ```bash

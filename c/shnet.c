@@ -4,6 +4,10 @@
  */
 
 #define _GNU_SOURCE
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE
+#include <mach-o/dyld.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1750,12 +1754,19 @@ static int update_binary_from_url(const char *url) {
     }
 
     char self_path[512] = "";
+#if defined(__APPLE__)
+    uint32_t size = sizeof(self_path);
+    if (_NSGetExecutablePath(self_path, &size) != 0) {
+        safe_strncpy(self_path, "./girchat", sizeof(self_path));
+    }
+#else
     ssize_t slen = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
     if (slen > 0) {
         self_path[slen] = '\0';
     } else {
         safe_strncpy(self_path, "./girchat", sizeof(self_path));
     }
+#endif
 
     char tmp_path[560];
     snprintf(tmp_path, sizeof(tmp_path), "%s.update.tmp", self_path);
