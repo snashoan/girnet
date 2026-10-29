@@ -5,24 +5,54 @@
   / ___|_ _|  _ \ / ___| | | |  / \|_   _|
  | |  _ | || |_) | |   | |_| | / _ \ | |  
  | |_| || ||  _ <| |___|  _  |/ ___ \| |  
-  \____|___|_| \_\\____|_| |_/_/   \_\_|  v1.0.0
+  \____|___|_| \_\\____|_| |_/_/   \_\_|  v1.1.0
 ```
 
-**girchat** is a high-performance, dual-stack IPv6 peer mesh communicator and node runtime designed for device-owned applications. It runs anywhere with zero external dependencies: pure Java, standalone Native C, and single-file Python 3.
+**girchat** is a high-performance, dual-stack IPv6 peer mesh communicator and node runtime designed for device-owned applications. It runs anywhere with zero external dependencies: standalone Native C (musl-static), pure Java, and single-file Python 3.
+
+---
+
+## Installation
+
+Install `girchat` / `shnet` directly from GitHub with a single command:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash
+```
+
+*(On Termux or environments without bash, run with `sh`: `curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | sh`)*
+
+- **Android (Termux) / Linux aarch64**: Automatically installs the prebuilt 100% static musl binary (194 KB, zero dependencies).
+- **x86_64 / Other Architectures**: Compiles natively if `gcc` or `clang` is present, or falls back to the zero-dependency pure Python 3 edition.
+
+Verify installation:
+```bash
+girchat -v
+# girchat version 1.1.0 (Built Oct 29 2026 / Linux aarch64 musl-static / Dual-Stack IPv6)
+```
 
 ---
 
 ## Key Capabilities
 
 - **Dual-Stack IPv6 Peer Mesh & Priority**: Strongly prioritizes global routable IPv6 (`2409:...`, `2000::/3`, `fc00::/7`, `fd00::/8`) followed by link-local IPv6 (`fe80::`), and dual-stack socket binding (`IPV6_V6ONLY = 0`).
-- **Clean Protocol-Style Terminal Logging**: Crisp, zero-emoji daemon protocol output (`[CONNECT]`, `[DISCONNECT]`, `[RECV]`, `[SEND]`, `[ACTION]`, `[NICK]`, `[STATUS]`, `[WHOIS]`) with compact prompt `rei[peer]> ` or `rei> `.
-- **Identity Persistence & Nickname Separation**: Persistent nickname stored in `~/.shnet/identity`. If local and peer nicknames match (e.g. both named `rei`), girchat disambiguates incoming messages as `rei#peer` vs `rei` so chat logs are always distinct.
-- **IRC Slash Commands**: Full interactive slash commands:
+- **Concurrent Multi-Peer Registry**: Maintains a thread-safe registry table (`MAX_PEERS = 64`). Incoming connections and messages never overwrite or hijack active conversations.
+- **Fast Non-Blocking Network Discovery (`/scan`, `girchat scan`)**: Probes local IPv4 subnets and localhost ports concurrently via non-blocking socket polling in ~1 second.
+- **Peer Switching & Replacement (`/peers`, `/peer <#>`, `/replace`)**: Switch conversation targets by number, name, or endpoint, or replace existing slots in-place.
+- **Version Checking & In-Place Self-Update (`/version`, `girchat check`, `girchat update`)**: Live version negotiation across nodes and one-command binary updates.
+- **Identity Persistence & Nickname Separation**: Persistent nickname stored in `~/.shnet/identity`. If local and peer nicknames match, girchat disambiguates logs as `rei#peer` vs `rei`.
+- **IRC Slash Commands**:
+  - `/scan [port]` - Probe subnet and localhost for active nodes.
+  - `/peers` - List known and online peers with status, version, and active target.
+  - `/peer <#|name|url>` / `/switch <#>` - Switch active conversation target.
+  - `/replace <#> <url>` - Replace peer slot with new node address.
+  - `/all <message>` - Broadcast message across all online peers.
+  - `/disconnect [target]` - Disconnect specific peer cleanly.
+  - `/version`, `/ver` - Inspect local binary and active peer version.
+  - `/check [target]` - Check remote node or binary server version.
   - `/nick <name>` - Update and persist your nickname across sessions.
   - `/me <action>` - Send action message (`[ACTION] 12:00:00 * rei waves to peer`).
-  - `/whois` - Inspect identity, connection state, and latency for active peer.
-  - `/peer <url>` - Connect to target peer (supports bracketed IPv6 `[2409:...]:8723`).
-  - `/peers` - List recent mesh peers from storage history.
+  - `/whois` - Inspect identity, endpoints, and latency for active peer.
   - `/history [limit]` - Inspect chat history.
   - `/qr` - Display terminal ANSI QR code of your node URL.
   - `/info` / `/status` - Display IPv6 and IPv4 listening addresses.
@@ -30,9 +60,9 @@
   - `/help` - Command reference.
   - `/exit` / `/quit` - Clean disconnect and node shutdown.
 - **Multi-Platform Standalone Deployments**:
-  - **Java Fat JAR**: `shnet.jar` / `girchat.jar` (1.4MB, self-contained, zero Android SDK required).
-  - **Native C Binary**: `shnet` / `girchat` (76KB, zero external dependencies, embedded QR generator).
-  - **Pure Python 3**: `shnet.py` / `girchat.py` (87KB, single-file, zero pip dependencies).
+  - **Native C Binary**: `bin/girchat` / `bin/shnet` (194 KB, static musl, zero runtime required).
+  - **Java Fat JAR**: `shnet.jar` / `girchat.jar` (1.4 MB, self-contained, Java 11+).
+  - **Pure Python 3**: `python/shnet.py` (87 KB, single-file, zero pip dependencies).
 
 ---
 
@@ -41,43 +71,54 @@
 ### 1. Launch Interactive Chat
 
 ```bash
-# Terminal 1 / Device 1 (starts Host mode on port 8723, listening on Dual-Stack IPv6 & IPv4):
+# Start node (listens on Dual-Stack IPv6 & IPv4, default port 8723):
 girchat
 
-# Terminal 2 / Device 2 (auto-discovers local or LAN host, meshes immediately):
-girchat --name alice
+# Connect directly to a peer on launch:
+girchat http://192.168.89.60:8723
 
-# Or specify a direct target address (IPv6 or IPv4):
-girchat [2409:4055:2e3d:88c4::d5]:8723
+# Specify custom port and nickname:
+girchat -p 8725 -n alice
 ```
 
-### 2. Slash Commands in Chat
+### 2. Network Discovery & Peer Switching
 
 ```irc
-rei[alice]> /me smiles at the mesh
-[ACTION] 12:00:00 * rei smiles at the mesh
+rei> /scan
+[SCAN] Probing localhost and local network on port 8723...
+    [FOUND] [1] monitor        (v1.1.0) http://192.168.89.135:8723
+[SCAN] Finished. 1 node(s) discovered.
 
-rei[alice]> /whois
-[WHOIS]
-  local: rei (port 8723)
-  peer:  alice (http://[2409:4055:2e3d:88c4::d5]:8723/)
-  state: online
+rei> /peers
+[PEERS] (1 registered)
+  #   STATUS    VER       NAME             ENDPOINT
+* [1] [online ] v1.1.0    monitor          http://192.168.89.135:8723 (ACTIVE)
 
-rei[alice]> /nick hoan
-[NICK] rei -> hoan
+rei[monitor]> Hello from Termux!
+[SEND] 14:00:00 <rei> Hello from Termux!
 ```
 
-### 3. One-Shot Send & History
+### 3. Check Versions & Update
+
+```bash
+# Check version compatibility against another node:
+girchat check http://192.168.89.60:8723
+
+# In-place self-update from a server:
+girchat update http://192.168.89.60:8080/girchat
+```
+
+### 4. One-Shot Send & History
 
 ```bash
 # Send a message to an IPv6 or IPv4 node:
-girchat send [2409:4055:2e3d:88c4::d5]:8723 "Hello via IPv6 mesh!"
+girchat send http://192.168.89.60:8723 "Hello via mesh!"
 
 # View stored chat history:
 girchat history
 ```
 
-### 4. Static File Hosting
+### 5. Static File Hosting
 
 ```bash
 # Serve static directory over dual-stack IPv6/IPv4 with terminal QR code:
