@@ -1771,6 +1771,9 @@ static void *handle_client(void *arg) {
 
         if (strcmp(req_path, "/") == 0 && g_static_dir[0] == '\0') {
             FILE *hf = fopen("/root/workspace/download/index.html", "r");
+            if (!hf) hf = fopen("/root/workspace/shnet/web/index.html", "r");
+            if (!hf) hf = fopen("web/index.html", "r");
+            if (!hf) hf = fopen("index.html", "r");
             if (hf) {
                 fseek(hf, 0, SEEK_END);
                 long sz = ftell(hf);
@@ -2140,6 +2143,21 @@ static int update_binary_from_url(const char *url) {
     return 0;
 }
 
+static void try_launch_browser(int port) {
+    if (!getenv("DISPLAY")) return;
+    char cmd[512];
+    if (access("/usr/local/bin/chromium", X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "/usr/local/bin/chromium --no-sandbox --disable-dev-shm-usage --disable-gpu 'http://127.0.0.1:%d/' >/dev/null 2>&1 &", port);
+    } else if (access("/usr/bin/chromium-browser", X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "chromium-browser --no-sandbox 'http://127.0.0.1:%d/' >/dev/null 2>&1 &", port);
+    } else if (access("/usr/bin/firefox", X_OK) == 0) {
+        snprintf(cmd, sizeof(cmd), "firefox 'http://127.0.0.1:%d/' >/dev/null 2>&1 &", port);
+    } else {
+        snprintf(cmd, sizeof(cmd), "xdg-open 'http://127.0.0.1:%d/' >/dev/null 2>&1 &", port);
+    }
+    system(cmd);
+}
+
 static void run_chat_repl(const char *initial_peer, int preferred_port, const char *cli_name) {
     resolve_nickname(cli_name, g_local_name, sizeof(g_local_name));
 
@@ -2179,6 +2197,8 @@ static void run_chat_repl(const char *initial_peer, int preferred_port, const ch
     printf("node: %s | port: %d\n", g_local_name, g_local_port);
     printf("endpoint: %s\n", primary_url);
     print_links(g_local_port);
+    printf("web: http://127.0.0.1:%d/ (browser chat UI)\n", g_local_port);
+    try_launch_browser(g_local_port);
 
     pthread_mutex_lock(&g_peer_mutex);
     if (g_active_peer_idx >= 0 && g_active_peer_idx < g_peer_count) {

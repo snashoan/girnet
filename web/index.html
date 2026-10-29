@@ -2,960 +2,1443 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>girchat [dual-stack ipv6] - Web3 Node Console & Downloads</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>girchat • P2P Mesh Communicator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #07090e;
-      --panel: #0d121d;
-      --card: #121826;
-      --border: #1e293b;
-      --accent: #38bdf8;
-      --accent-glow: rgba(56, 189, 248, 0.25);
-      --green: #34d399;
-      --green-glow: rgba(52, 211, 153, 0.2);
-      --purple: #a855f7;
-      --purple-glow: rgba(168, 85, 247, 0.2);
-      --red: #f43f5e;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+      --bg-base: #080b11;
+      --bg-surface: #0f1523;
+      --bg-card: #151d30;
+      --bg-card-hover: #1c263e;
+      --border-subtle: rgba(255, 255, 255, 0.07);
+      --border-focus: #38bdf8;
+      
+      --accent-primary: #38bdf8;
+      --accent-gradient: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+      --accent-glow: rgba(56, 189, 248, 0.3);
+      
+      --bubble-sent: linear-gradient(135deg, #0284c7 0%, #1d4ed8 100%);
+      --bubble-recv: #192238;
+      
+      --status-online: #10b981;
+      --status-online-glow: rgba(16, 185, 129, 0.35);
+      --status-offline: #64748b;
+      
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+
+      --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+      
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --radius-full: 9999px;
+      --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+      --shadow-glow: 0 0 15px var(--accent-glow);
     }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.5;
-      min-height: 100vh;
+    
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background: var(--bg-base);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Full App Shell */
+    .app-container {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Left Sidebar */
+    .sidebar {
+      width: 360px;
+      min-width: 320px;
+      max-width: 420px;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
       display: flex;
       flex-direction: column;
+      height: 100%;
+      z-index: 20;
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    header {
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      padding: 12px 20px;
+
+    /* Sidebar Header Profile */
+    .sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-subtle);
       display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
       align-items: center;
+      justify-content: space-between;
       gap: 12px;
-      position: sticky;
-      top: 0;
-      z-index: 50;
+      background: rgba(15, 21, 35, 0.85);
+      backdrop-filter: blur(12px);
     }
-    .brand {
+
+    .user-pill {
       display: flex;
       align-items: center;
       gap: 10px;
+      text-decoration: none;
+      cursor: pointer;
+      flex: 1;
+      min-width: 0;
     }
-    .logo {
-      font-family: var(--mono);
-      font-size: 1.25rem;
-      font-weight: 800;
+
+    .avatar-wrapper {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1.05rem;
       color: #fff;
-      letter-spacing: -0.5px;
       text-transform: uppercase;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      user-select: none;
     }
-    .logo span { color: var(--accent); }
-    .badge {
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      padding: 2px 7px;
-      border-radius: 4px;
-      font-weight: 600;
-      border: 1px solid;
+
+    .status-indicator {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 2px solid var(--bg-surface);
+      background: var(--status-online);
+      box-shadow: 0 0 8px var(--status-online-glow);
     }
-    .badge-v6 {
-      color: var(--accent);
-      background: var(--accent-glow);
-      border-color: rgba(56, 189, 248, 0.3);
+    .status-indicator.offline {
+      background: var(--status-offline);
+      box-shadow: none;
     }
-    .badge-status {
-      display: inline-flex;
+
+    .user-meta {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .user-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      letter-spacing: -0.2px;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-status-text {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
       align-items: center;
       gap: 5px;
-      color: var(--green);
-      background: var(--green-glow);
-      border-color: rgba(52, 211, 153, 0.3);
+      font-family: var(--font-mono);
     }
-    .dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 8px var(--green);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.5; transform: scale(0.85); }
-    }
-    .nav-tabs {
+
+    .header-actions {
       display: flex;
+      align-items: center;
       gap: 6px;
-      background: rgba(0,0,0,0.3);
-      padding: 3px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
     }
-    .tab-btn {
+
+    .btn-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
       background: transparent;
-      border: none;
-      color: var(--muted);
-      padding: 6px 14px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      border-radius: 6px;
+      border: 1px solid transparent;
+      color: var(--text-muted);
       cursor: pointer;
-      transition: all 0.2s;
-    }
-    .tab-btn:hover { color: #fff; }
-    .tab-btn.active {
-      background: var(--card);
-      color: var(--accent);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-    }
-
-    /* Main Container */
-    main {
-      flex: 1;
-      max-width: 1200px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .tab-content { display: none; }
-    .tab-content.active { display: flex; flex-direction: column; gap: 16px; flex: 1; }
-
-    /* Node Identity Bar */
-    .node-bar {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 16px;
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-      font-family: var(--mono);
-      font-size: 0.82rem;
-    }
-    .node-identity {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .node-key {
-      color: var(--accent);
-      background: rgba(56, 189, 248, 0.1);
-      padding: 2px 6px;
-      border-radius: 4px;
-    }
-    .host-selector {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .host-input {
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 4px 8px;
-      border-radius: 6px;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-      width: 180px;
-    }
-
-    /* Layout Split */
-    .chat-layout {
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 16px;
-      flex: 1;
-      min-height: 520px;
-    }
-    @media (max-width: 840px) {
-      .chat-layout { grid-template-columns: 1fr; }
-    }
-
-    /* Sidebar / Peers */
-    .sidebar {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .sidebar-title {
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .peer-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      overflow-y: auto;
-      max-height: 380px;
-      flex: 1;
-    }
-    .peer-card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
-      cursor: pointer;
-      transition: all 0.2s;
-      position: relative;
-    }
-    .peer-card:hover {
-      border-color: var(--accent);
-      transform: translateY(-1px);
-    }
-    .peer-card.active {
-      border-color: var(--accent);
-      background: rgba(56, 189, 248, 0.08);
-      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
-    }
-    .peer-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 4px;
-    }
-    .peer-name {
-      font-weight: 700;
-      font-size: 0.9rem;
-      color: #fff;
-    }
-    .peer-status {
-      font-size: 0.7rem;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-family: var(--mono);
-    }
-    .peer-status.online { background: var(--green-glow); color: var(--green); }
-    .peer-status.offline { background: rgba(244, 63, 94, 0.15); color: var(--red); }
-    .peer-url {
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      color: var(--muted);
-      word-break: break-all;
-    }
-
-    .connect-form {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      padding-top: 10px;
-      border-top: 1px solid var(--border);
-    }
-    .connect-input {
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 7px 10px;
-      border-radius: 6px;
-      font-family: var(--mono);
-      font-size: 0.78rem;
-    }
-    .connect-input:focus, .host-input:focus, .chat-input:focus {
-      outline: none;
-      border-color: var(--accent);
-    }
-
-    /* Chat Area */
-    .chat-area {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .chat-header {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(0,0,0,0.2);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .chat-target {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .target-pill {
-      font-family: var(--mono);
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: var(--accent);
-    }
-    .chat-actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    /* Messages Stream */
-    .messages-container {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      min-height: 340px;
-      max-height: 480px;
-      background: #090d14;
-    }
-    .msg-bubble {
-      max-width: 82%;
-      padding: 10px 14px;
-      border-radius: 10px;
-      font-size: 0.9rem;
-      position: relative;
-      line-height: 1.4;
-      word-break: break-word;
-    }
-    .msg-out {
-      align-self: flex-end;
-      background: #112233;
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      border-bottom-right-radius: 2px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    }
-    .msg-in {
-      align-self: flex-start;
-      background: #1c152d;
-      border: 1px solid rgba(168, 85, 247, 0.35);
-      border-bottom-left-radius: 2px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    }
-    .msg-action {
-      align-self: center;
-      background: rgba(52, 211, 153, 0.08);
-      border: 1px dashed rgba(52, 211, 153, 0.3);
-      color: var(--green);
-      font-style: italic;
-      font-size: 0.82rem;
-      padding: 5px 12px;
-      border-radius: 20px;
-    }
-    .msg-meta {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-      font-family: var(--mono);
-      font-size: 0.7rem;
-      margin-bottom: 4px;
-      opacity: 0.75;
-    }
-    .msg-sender { font-weight: 700; color: #fff; }
-    .msg-out .msg-sender { color: var(--accent); }
-    .msg-in .msg-sender { color: var(--purple); }
-
-    /* Quick Chips */
-    .quick-chips {
-      display: flex;
-      gap: 6px;
-      padding: 8px 14px;
-      background: rgba(0,0,0,0.25);
-      border-top: 1px solid var(--border);
-      overflow-x: auto;
-    }
-    .chip {
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      padding: 3px 8px;
-      border-radius: 4px;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: all 0.2s;
-    }
-    .chip:hover {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-
-    /* Input Bar */
-    .chat-input-bar {
-      display: flex;
-      gap: 8px;
-      padding: 12px;
-      background: var(--panel);
-      border-top: 1px solid var(--border);
-    }
-    .chat-input {
-      flex: 1;
-      background: var(--card);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    .btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 8px 14px;
-      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    .btn-icon:hover {
+      background: var(--bg-card);
+      border-color: var(--border-subtle);
+      color: var(--accent-primary);
+      transform: translateY(-1px);
+    }
+    .btn-icon svg { width: 18px; height: 18px; }
+
+    /* Search & Scan Bar */
+    .sidebar-search-area {
+      padding: 12px 16px;
+      display: flex;
+      gap: 8px;
+    }
+
+    .search-input-box {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-full);
+      padding: 0 12px;
+      transition: all 0.2s;
+    }
+    .search-input-box:focus-within {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+    }
+    .search-input-box svg {
+      width: 16px;
+      height: 16px;
+      color: var(--text-dim);
+      margin-right: 8px;
+    }
+    .search-input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
       font-size: 0.85rem;
+      font-family: var(--font-sans);
+      padding: 8px 0;
+    }
+    .search-input::placeholder { color: var(--text-dim); }
+
+    .btn-scan {
+      padding: 0 14px;
+      height: 36px;
+      border-radius: var(--radius-full);
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--accent-primary);
+      font-size: 0.8rem;
       font-weight: 600;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .btn-scan:hover {
+      background: var(--accent-primary);
+      color: #000;
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+    .btn-scan svg { width: 14px; height: 14px; }
+
+    /* Sidebar Section Divider */
+    .sidebar-section-label {
+      padding: 8px 18px 4px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .peer-count-badge {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 1px 6px;
+      border-radius: var(--radius-full);
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+    }
+
+    /* Peers / Users List */
+    .peers-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .peers-scroll::-webkit-scrollbar { width: 5px; }
+    .peers-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+    }
+
+    .peer-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
       cursor: pointer;
       border: 1px solid transparent;
       transition: all 0.2s;
-      text-decoration: none;
-      font-family: var(--mono);
+      user-select: none;
+      position: relative;
     }
-    .btn-accent {
-      background: var(--accent);
-      color: #07090e;
+    .peer-item:hover {
+      background: var(--bg-card);
+      border-color: var(--border-subtle);
+      transform: translateX(2px);
     }
-    .btn-accent:hover { filter: brightness(1.15); box-shadow: 0 0 10px var(--accent-glow); }
-    .btn-green {
-      background: var(--green);
-      color: #07090e;
+    .peer-item.active {
+      background: rgba(56, 189, 248, 0.08);
+      border-color: rgba(56, 189, 248, 0.3);
+      box-shadow: inset 3px 0 0 var(--accent-primary);
     }
-    .btn-green:hover { filter: brightness(1.15); }
-    .btn-muted {
-      background: var(--card);
-      color: var(--muted);
-      border-color: var(--border);
-    }
-    .btn-muted:hover { color: #fff; border-color: var(--accent); }
-    .btn-sm { padding: 4px 8px; font-size: 0.75rem; }
 
-    /* Downloads & Docs Card Styles */
-    .doc-section {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 24px;
+    .peer-item-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .peer-item-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+    .peer-item-name {
+      font-weight: 600;
+      font-size: 0.92rem;
+      color: #fff;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .peer-item-time {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+    .peer-item-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+    }
+    .peer-item-preview {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .peer-network-tag {
+      font-size: 0.65rem;
+      font-family: var(--font-mono);
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+
+    /* Connect Drawer at Bottom of Sidebar */
+    .sidebar-connect-box {
+      padding: 12px 14px;
+      background: rgba(15, 21, 35, 0.95);
+      border-top: 1px solid var(--border-subtle);
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 8px;
     }
-    .doc-section h2 { font-size: 1.3rem; color: #fff; }
-    .doc-section h3 { font-size: 1rem; color: var(--accent); margin-bottom: 6px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
+    .connect-input-row {
+      display: flex;
+      gap: 6px;
     }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px;
+    .connect-url-input {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      padding: 8px 10px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .connect-url-input:focus {
+      border-color: var(--border-focus);
+    }
+    .btn-connect-action {
+      background: var(--accent-gradient);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-connect-action:hover {
+      filter: brightness(1.15);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    /* Right Main Chat Area */
+    .main-chat {
+      flex: 1;
       display: flex;
       flex-direction: column;
+      height: 100%;
+      background: var(--bg-base);
+      position: relative;
+    }
+
+    /* Top Conversation Header */
+    .chat-topbar {
+      height: 64px;
+      padding: 0 20px;
+      background: rgba(15, 21, 35, 0.8);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
       justify-content: space-between;
       gap: 12px;
-    }
-    pre {
-      background: #05070a;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
-      overflow-x: auto;
-      font-family: var(--mono);
-      font-size: 0.8rem;
-      color: #38bdf8;
-    }
-    .copy-box {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .copy-input {
-      flex: 1;
-      min-width: 220px;
-      background: #05070a;
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 0.8rem;
-      padding: 8px 12px;
-      border-radius: 6px;
+      z-index: 10;
     }
 
-    /* QR Modal */
-    .modal-overlay {
+    .chat-target-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn-back {
       display: none;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-back svg { width: 20px; height: 20px; }
+
+    .chat-target-titles {
+      display: flex;
+      flex-direction: column;
+    }
+    .chat-target-name {
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: -0.2px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .chat-target-route {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .route-badge {
+      color: var(--accent-primary);
+      background: rgba(56, 189, 248, 0.1);
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+
+    .chat-topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Chat Messages Stream */
+    .chat-stream-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+    .chat-stream-container::-webkit-scrollbar { width: 6px; }
+    .chat-stream-container::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,0.08);
+      border-radius: 4px;
+    }
+
+    /* Day Divider */
+    .day-divider {
+      align-self: center;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      padding: 3px 12px;
+      border-radius: var(--radius-full);
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-dim);
+      margin: 8px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Message Bubbles */
+    .msg-group {
+      display: flex;
+      flex-direction: column;
+      max-width: 75%;
+      animation: msgPop 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes msgPop {
+      0% { opacity: 0; transform: translateY(6px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg-group.sent {
+      align-self: flex-end;
+      align-items: flex-end;
+    }
+    .msg-group.received {
+      align-self: flex-start;
+      align-items: flex-start;
+    }
+
+    .msg-bubble {
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: 0.93rem;
+      line-height: 1.45;
+      word-break: break-word;
+      position: relative;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+    }
+
+    .msg-group.sent .msg-bubble {
+      background: var(--bubble-sent);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-group.received .msg-bubble {
+      background: var(--bubble-recv);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg-info-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      font-size: 0.68rem;
+      color: rgba(255, 255, 255, 0.6);
+      font-family: var(--font-mono);
+      justify-content: flex-end;
+    }
+    .msg-group.received .msg-info-line {
+      color: var(--text-dim);
+      justify-content: flex-start;
+    }
+
+    .check-icon {
+      width: 14px;
+      height: 14px;
+      color: #7dd3fc;
+    }
+
+    /* Action & System Notice Bubbles */
+    .msg-action-pill {
+      align-self: center;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px dashed rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      font-size: 0.8rem;
+      padding: 6px 16px;
+      border-radius: var(--radius-full);
+      font-style: italic;
+      margin: 4px 0;
+    }
+
+    .msg-system-notice {
+      align-self: center;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      padding: 4px 12px;
+      border-radius: var(--radius-full);
+      font-family: var(--font-mono);
+      margin: 4px 0;
+    }
+
+    /* Floating Command Suggestions Palette */
+    .command-popover {
+      position: absolute;
+      bottom: 84px;
+      left: 20px;
+      right: 20px;
+      background: rgba(21, 29, 48, 0.95);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      backdrop-filter: blur(16px);
+      padding: 8px;
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 30;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .command-popover.open { display: flex; }
+
+    .cmd-item {
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .cmd-item:hover {
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--accent-primary);
+    }
+    .cmd-name {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: var(--accent-primary);
+      width: 120px;
+    }
+    .cmd-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      flex: 1;
+    }
+
+    /* Input Floating Dock */
+    .chat-input-bar-container {
+      padding: 12px 20px 20px;
+      background: linear-gradient(180deg, transparent 0%, rgba(8, 11, 17, 0.9) 30%, var(--bg-base) 100%);
+      position: relative;
+      z-index: 15;
+    }
+
+    .chat-dock {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-full);
+      padding: 6px 8px 6px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.5);
+      transition: all 0.25s;
+    }
+    .chat-dock:focus-within {
+      border-color: var(--border-focus);
+      box-shadow: 0 8px 24px -4px var(--accent-glow);
+    }
+
+    .cmd-pill-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-subtle);
+      color: var(--accent-primary);
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 0.9rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .cmd-pill-btn:hover {
+      background: var(--accent-primary);
+      color: #000;
+    }
+
+    .chat-textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-size: 0.92rem;
+      font-family: var(--font-sans);
+      resize: none;
+      max-height: 120px;
+      min-height: 24px;
+      line-height: 1.4;
+      padding: 4px 0;
+    }
+    .chat-textarea::placeholder { color: var(--text-dim); }
+
+    .btn-send {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--accent-gradient);
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 2px 10px var(--accent-glow);
+      flex-shrink: 0;
+    }
+    .btn-send:hover {
+      transform: scale(1.06);
+      filter: brightness(1.15);
+    }
+    .btn-send:active { transform: scale(0.95); }
+    .btn-send svg { width: 18px; height: 18px; margin-left: 2px; }
+
+    /* Empty Chat Screen State */
+    .empty-chat-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 40px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+    .empty-icon-shield {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-primary);
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .empty-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .empty-desc {
+      font-size: 0.88rem;
+      max-width: 380px;
+      line-height: 1.5;
+    }
+
+    /* Modal Sheet */
+    .modal-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.75);
-      backdrop-filter: blur(4px);
-      z-index: 100;
-      justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      display: none;
       align-items: center;
+      justify-content: center;
+      z-index: 100;
       padding: 20px;
     }
     .modal-overlay.open { display: flex; }
-    .modal {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
+
+    .modal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
       padding: 24px;
-      max-width: 420px;
       width: 100%;
+      max-width: 440px;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 16px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.7);
+      animation: modalIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .modal-title { font-size: 1.1rem; font-weight: 700; color: #fff; }
-    .qr-img {
-      width: 240px;
-      height: 240px;
-      border-radius: 8px;
-      border: 2px solid var(--accent);
+    @keyframes modalIn {
+      0% { opacity: 0; transform: scale(0.95); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-title { font-size: 1.15rem; font-weight: 700; color: #fff; }
+    .qr-frame {
+      width: 220px;
+      height: 220px;
+      border-radius: var(--radius-md);
       background: #fff;
+      padding: 10px;
+      border: 2px solid var(--accent-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .qr-frame img { width: 100%; height: 100%; object-fit: contain; }
+
+    .modal-input-box {
+      width: 100%;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .btn-full {
+      width: 100%;
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      background: var(--accent-gradient);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-full:hover { filter: brightness(1.1); }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 100%;
+        max-width: 100%;
+        position: absolute;
+        inset: 0;
+      }
+      .sidebar.hidden-mobile {
+        transform: translateX(-100%);
+      }
+      .btn-back { display: inline-flex; }
     }
   </style>
 </head>
 <body>
 
-  <header>
-    <div class="brand">
-      <div class="logo">GIR<span>CHAT</span></div>
-      <span class="badge badge-v6">DUAL-STACK IPv6</span>
-      <span class="badge badge-status"><span class="dot"></span> NODE ONLINE</span>
-    </div>
+  <div class="app-container">
 
-    <div class="nav-tabs">
-      <button class="tab-btn active" onclick="switchTab('chat')">Live Chat Console</button>
-      <button class="tab-btn" onclick="switchTab('downloads')">Downloads &amp; Guide</button>
-    </div>
-
-    <div style="display:flex; gap:8px;">
-      <button class="btn btn-muted btn-sm" onclick="toggleQrModal()">QR Code</button>
-      <button class="btn btn-muted btn-sm" onclick="relayCommand('/scan')">Scan Subnet</button>
-    </div>
-  </header>
-
-  <main>
-    <!-- TAB 1: LIVE CHAT CONSOLE -->
-    <div id="tab-chat" class="tab-content active">
+    <!-- LEFT SIDEBAR: USERS & MESH DIRECTORY -->
+    <aside class="sidebar" id="sidebar">
       
-      <!-- Node Identity Strip -->
-      <div class="node-bar">
-        <div class="node-identity">
-          <span>Identity: <strong id="nodeName">rei</strong></span>
-          <span class="node-key" id="nodeHash">0x7a8f...b379</span>
-          <span class="badge badge-v6" id="nodeEndpoint">http://[2409:4055:2db3:b379::d4]:8723/</span>
+      <!-- User Profile Header -->
+      <div class="sidebar-header">
+        <div class="user-pill" onclick="toggleSettingsModal()" title="Local Node Settings">
+          <div class="avatar-wrapper">
+            <div class="avatar" id="localAvatar" style="background: linear-gradient(135deg, #ec4899, #8b5cf6);">R</div>
+            <div class="status-indicator"></div>
+          </div>
+          <div class="user-meta">
+            <div class="user-name" id="localNick">rei</div>
+            <div class="user-status-text">
+              <span>Online</span> • <span id="localPort">8723</span>
+            </div>
+          </div>
         </div>
 
-        <div class="host-selector">
-          <label style="color:var(--muted); font-size:0.75rem;">Node URL:</label>
-          <input type="text" id="customHostInput" class="host-input" value="http://127.0.0.1:8723" title="Target Node API endpoint">
-          <button class="btn btn-muted btn-sm" onclick="applyCustomHost()">Bind</button>
+        <div class="header-actions">
+          <button class="btn-icon" onclick="toggleQrModal()" title="Node Pairing QR">
+            <!-- QR Icon SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+          </button>
+          <button class="btn-icon" onclick="toggleSettingsModal()" title="Node Identity & Routes">
+            <!-- Gear/Settings Icon SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Search & Radar Scan Bar -->
+      <div class="sidebar-search-area">
+        <div class="search-input-box">
+          <!-- Search Icon SVG -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="searchInput" class="search-input" placeholder="Search users or IPv6..." oninput="filterPeerList()">
+        </div>
+        <button class="btn-scan" onclick="triggerScan()" title="Probe local subnet for nodes">
+          <!-- Radar SVG -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 1 0 10 10H12V2z"></path>
+            <path d="M12 12L2.5 7.5"></path>
+          </svg>
+          <span>Scan</span>
+        </button>
+      </div>
+
+      <!-- Users Section Header -->
+      <div class="sidebar-section-label">
+        <span>Connected Peers</span>
+        <span class="peer-count-badge" id="peerCountLabel">0</span>
+      </div>
+
+      <!-- Users / Peers List Container -->
+      <div class="peers-scroll" id="peersList">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Direct Connect Drawer -->
+      <div class="sidebar-connect-box">
+        <div class="connect-input-row">
+          <input type="text" id="directConnectInput" class="connect-url-input" placeholder="http://[2409:...]:8723" onkeydown="if(event.key==='Enter') connectDirectPeer()">
+          <button class="btn-connect-action" onclick="connectDirectPeer()" title="Connect to peer endpoint">
+            <!-- User Plus SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="8.5" cy="7" r="4"></circle>
+              <line x1="20" y1="8" x2="20" y2="14"></line>
+              <line x1="23" y1="11" x2="17" y2="11"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT MAIN: CHAT INTERFACE -->
+    <main class="main-chat" id="mainChat">
+      
+      <!-- Top Conversation Bar -->
+      <div class="chat-topbar">
+        <div class="chat-target-meta">
+          <button class="btn-back" onclick="toggleSidebar(true)" title="Back to user list">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+          </button>
+
+          <div class="avatar" id="activePeerAvatar" style="background: linear-gradient(135deg, #06b6d4, #3b82f6); width:38px; height:38px; font-size:0.95rem;">?</div>
+          
+          <div class="chat-target-titles">
+            <div class="chat-target-name" id="activePeerTitle">Select a user</div>
+            <div class="chat-target-route" id="activePeerRoute">
+              <span class="route-badge" id="activePeerStatusBadge">Offline</span>
+              <span id="activePeerEndpoint">No active peer selected</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-topbar-actions">
+          <button class="btn-icon" onclick="relayCommand('/whois')" title="User identity & latency">
+            <!-- Info SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+          </button>
+          <button class="btn-icon" onclick="relayCommand('/disconnect')" title="Disconnect this peer">
+            <!-- Close / Disconnect SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
       </div>
 
-      <!-- Main Chat Layout -->
-      <div class="chat-layout">
-        
-        <!-- Sidebar / Peers Registry -->
-        <aside class="sidebar">
-          <div class="sidebar-title">
-            <span>Known Peers (<span id="peerCount">0</span>)</span>
-            <button class="btn btn-muted btn-sm" onclick="fetchState()" title="Refresh peer list">Sync</button>
+      <!-- Messages Stream -->
+      <div class="chat-stream-container" id="chatStream">
+        <div class="empty-chat-state" id="emptyChatPlaceholder">
+          <div class="empty-icon-shield">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:32px;height:32px;">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
           </div>
-
-          <ul class="peer-list" id="peerList">
-            <li style="color:var(--muted); font-size:0.8rem; text-align:center; padding:20px 0;">
-              No peers discovered yet.<br>Click "Scan Subnet" or connect below.
-            </li>
-          </ul>
-
-          <div class="connect-form">
-            <label style="font-size:0.72rem; color:var(--muted); font-family:var(--mono);">Connect to Peer URL:</label>
-            <input type="text" id="newPeerUrl" class="connect-input" placeholder="http://[2409:...]:8723" onkeydown="if(event.key==='Enter') connectToPeer()">
-            <button class="btn btn-accent btn-sm" onclick="connectToPeer()">Connect Peer</button>
-          </div>
-        </aside>
-
-        <!-- Chat Stream & Console Area -->
-        <section class="chat-area">
-          <div class="chat-header">
-            <div class="chat-target">
-              <span style="font-size:0.8rem; color:var(--muted);">Active Target:</span>
-              <span class="target-pill" id="activePeerTarget">No Active Peer</span>
-            </div>
-            <div class="chat-actions">
-              <button class="btn btn-muted btn-sm" onclick="relayCommand('/peers')">/peers</button>
-              <button class="btn btn-muted btn-sm" onclick="relayCommand('/disconnect')">/disconnect</button>
-              <button class="btn btn-muted btn-sm" onclick="clearMessages()">Clear</button>
-            </div>
-          </div>
-
-          <!-- Message Ledger -->
-          <div class="messages-container" id="messagesContainer">
-            <div class="msg-bubble msg-action">
-              [SYSTEM] Live Web3 Chat Console initialized. Polling host node...
-            </div>
-          </div>
-
-          <!-- Quick Slash Command Chips -->
-          <div class="quick-chips">
-            <span class="chip" onclick="setCommand('/scan')">/scan</span>
-            <span class="chip" onclick="setCommand('/peers')">/peers</span>
-            <span class="chip" onclick="setCommand('/all ')">/all &lt;msg&gt;</span>
-            <span class="chip" onclick="setCommand('/whois')">/whois</span>
-            <span class="chip" onclick="setCommand('/nick ')">/nick &lt;name&gt;</span>
-            <span class="chip" onclick="setCommand('/history 20')">/history</span>
-            <span class="chip" onclick="setCommand('/version')">/version</span>
-          </div>
-
-          <!-- Input Bar -->
-          <div class="chat-input-bar">
-            <input type="text" id="chatInput" class="chat-input" placeholder="Type a message or slash command (/scan, /peers, /all, /nick...)..." autocomplete="off" onkeydown="if(event.key==='Enter') handleSend()">
-            <button class="btn btn-accent" id="sendBtn" onclick="handleSend()">Send</button>
-          </div>
-        </section>
-
-      </div>
-
-    </div>
-
-    <!-- TAB 2: DOWNLOADS & DOCUMENTATION -->
-    <div id="tab-downloads" class="tab-content">
-      <div class="doc-section">
-        <div>
-          <h2>Direct Node Downloads &amp; Platform Installers</h2>
-          <p style="color:var(--muted); margin-top:4px;">Deploy girchat / shnet on any Android device, Linux server, macOS workstation, or cloud instance.</p>
-        </div>
-
-        <div class="card">
-          <h3>Direct GitHub Installer (Recommended)</h3>
-          <p style="color:var(--muted); font-size:0.85rem;">One-line auto installer with architecture detection (musl-static binary on Linux/Termux, native C compile on macOS, zero-dependency Python fallback):</p>
-          <div class="copy-box">
-            <input type="text" id="installCmd" class="copy-input" readonly value="curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash" onclick="this.select()">
-            <button class="btn btn-green btn-sm" onclick="copyText('installCmd')">Copy Command</button>
-            <a class="btn btn-muted btn-sm" href="install.sh" download>Download Script</a>
-          </div>
-          <pre><code>curl -sSL https://raw.githubusercontent.com/snashoan/girnet/main/install.sh | bash</code></pre>
-        </div>
-
-        <h3>Binary Packages</h3>
-        <div class="grid">
-          <div class="card">
-            <div>
-              <h3>Native Static Binary <span class="badge badge-v6">194 KB</span></h3>
-              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">100% static musl build. Zero external dynamic dependencies, no glibc requirements. Runs directly in Termux and Linux aarch64.</p>
-            </div>
-            <a class="btn btn-green" href="girchat" download>Download girchat (194 KB)</a>
-          </div>
-
-          <div class="card">
-            <div>
-              <h3>Pure Python 3 <span class="badge" style="color:var(--purple); border-color:var(--purple);">87 KB</span></h3>
-              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">Single-file pure Python 3 implementation with dual-stack IPv6 socket mesh and zero pip dependencies.</p>
-            </div>
-            <a class="btn btn-accent" href="girchat.py" download>Download girchat.py (87 KB)</a>
-          </div>
-
-          <div class="card">
-            <div>
-              <h3>Java Fat JAR <span class="badge" style="color:var(--muted); border-color:var(--border);">1.4 MB</span></h3>
-              <p style="color:var(--muted); font-size:0.82rem; margin-top:4px;">Standalone runnable JAR for Java 17+ environments.</p>
-            </div>
-            <a class="btn btn-muted" href="girchat.jar" download>Download girchat.jar (1.4 MB)</a>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>Dual-Stack IPv6 Peer Mesh Quickstart</h3>
-          <pre><code># 1. Start daemon on port 8723:
-girchat -p 8723 -n rei
-
-# 2. Connect directly to peer:
-girchat http://[2409:4055:2db3:b379::d4]:8723 -n alice
-
-# 3. Inside chat, discover local peers:
-/scan
-/peers
-/switch 1</code></pre>
+          <div class="empty-title">Dual-Stack IPv6 Peer Mesh</div>
+          <div class="empty-desc">Select any discovered user on the left, or click "Scan" to auto-discover nodes on your local network.</div>
         </div>
       </div>
-    </div>
-  </main>
 
-  <!-- QR Code Modal -->
-  <div id="qrModal" class="modal-overlay" onclick="if(event.target===this) toggleQrModal()">
-    <div class="modal">
+      <!-- Floating Slash Command Autocomplete Popover -->
+      <div class="command-popover" id="commandPopover">
+        <div class="cmd-item" onclick="insertCommand('/scan')">
+          <div class="cmd-name">/scan</div>
+          <div class="cmd-desc">Discover nodes on subnet and localhost</div>
+        </div>
+        <div class="cmd-item" onclick="insertCommand('/peers')">
+          <div class="cmd-name">/peers</div>
+          <div class="cmd-desc">Display full connected peer registry table</div>
+        </div>
+        <div class="cmd-item" onclick="insertCommand('/all ')">
+          <div class="cmd-name">/all &lt;msg&gt;</div>
+          <div class="cmd-desc">Broadcast message to all online peers</div>
+        </div>
+        <div class="cmd-item" onclick="insertCommand('/nick ')">
+          <div class="cmd-name">/nick &lt;name&gt;</div>
+          <div class="cmd-desc">Change and persist your node nickname</div>
+        </div>
+        <div class="cmd-item" onclick="insertCommand('/whois')">
+          <div class="cmd-name">/whois</div>
+          <div class="cmd-desc">Inspect active peer routes and latency</div>
+        </div>
+        <div class="cmd-item" onclick="insertCommand('/disconnect')">
+          <div class="cmd-name">/disconnect</div>
+          <div class="cmd-desc">Disconnect active peer session cleanly</div>
+        </div>
+      </div>
+
+      <!-- Floating Input Bar Dock -->
+      <div class="chat-input-bar-container">
+        <div class="chat-dock">
+          <button class="cmd-pill-btn" onclick="toggleCommandPalette()" title="Quick slash commands">/</button>
+          <textarea id="messageInput" class="chat-textarea" placeholder="Type a message or /command..." rows="1" onkeydown="handleInputKey(event)"></textarea>
+          <button class="btn-send" id="btnSend" onclick="handleSendMessage()" title="Send message">
+            <!-- Paper Plane SVG -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- QR Modal -->
+  <div class="modal-overlay" id="qrModal" onclick="if(event.target===this) toggleQrModal()">
+    <div class="modal-card">
       <div class="modal-title">Pairing QR Code</div>
-      <img src="media/girchat_node_qr.png" alt="Node QR" class="qr-img" onerror="this.src='/media/girchat_node_qr.png'">
-      <div style="font-family:var(--mono); font-size:0.75rem; color:var(--muted); text-align:center; word-break:break-all;" id="qrUrlLabel">
-        http://[2409:4055:2db3:b379::d4]:8723/
+      <div class="qr-frame">
+        <img src="media/girchat_node_qr.png" alt="QR" onerror="this.src='/media/girchat_node_qr.png'">
       </div>
-      <button class="btn btn-muted btn-sm" onclick="toggleQrModal()">Close</button>
+      <div class="modal-input-box">
+        <span id="qrUrlLabel">http://[2409:4055:2db3:b379::d4]:8723/</span>
+        <button class="btn-icon" onclick="copyText('qrUrlLabel')" title="Copy URL">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+      </div>
+      <button class="btn-full" onclick="toggleQrModal()">Close</button>
+    </div>
+  </div>
+
+  <!-- Settings / Node Identity Modal -->
+  <div class="modal-overlay" id="settingsModal" onclick="if(event.target===this) toggleSettingsModal()">
+    <div class="modal-card">
+      <div class="modal-title">Node Configuration</div>
+      <div style="width:100%; display:flex; flex-direction:column; gap:10px;">
+        <label style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">Your Nickname:</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="changeNickInput" class="connect-url-input" style="padding:10px;" value="rei">
+          <button class="btn-connect-action" onclick="saveNickname()">Update</button>
+        </div>
+
+        <label style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono); margin-top:8px;">Target Node Host API:</label>
+        <div style="display:flex; gap:6px;">
+          <input type="text" id="hostApiInput" class="connect-url-input" style="padding:10px;" value="http://127.0.0.1:8723">
+          <button class="btn-connect-action" onclick="applyHostApi()">Bind</button>
+        </div>
+      </div>
+      <button class="btn-full" onclick="toggleSettingsModal()" style="margin-top:10px;">Done</button>
     </div>
   </div>
 
   <script>
-    // Configuration
-    let HOST_URL = "";
-    if (window.location.protocol.startsWith("http")) {
-      // If opened on port 8080 or port 8723:
-      HOST_URL = window.location.origin;
-    } else {
-      HOST_URL = "http://127.0.0.1:8723";
-    }
-
-    // If served from 8080, prefer chatting with daemon on 8723 if reachable
-    let API_BASE = HOST_URL;
+    // Configuration & State
+    let API_BASE = window.location.origin;
     if (window.location.port === "8080") {
-      // Set default target to 8723 on same hostname
       API_BASE = `${window.location.protocol}//${window.location.hostname}:8723`;
     }
-    document.getElementById("customHostInput").value = API_BASE;
+    document.getElementById("hostApiInput").value = API_BASE;
 
     let localNick = "rei";
-    let activePeer = "";
-    let lastRenderedCount = 0;
+    let activePeerUrl = "";
+    let peersListCache = [];
+    let messagesCache = [];
     let isUserScrolledUp = false;
 
-    // Detect user scroll in messages container
-    const msgContainer = document.getElementById("messagesContainer");
-    msgContainer.addEventListener("scroll", () => {
-      const atBottom = msgContainer.scrollHeight - msgContainer.scrollTop - msgContainer.clientHeight < 40;
+    // Deterministic Avatar Gradients
+    const GRADIENTS = [
+      "linear-gradient(135deg, #06b6d4, #3b82f6)",
+      "linear-gradient(135deg, #8b5cf6, #ec4899)",
+      "linear-gradient(135deg, #10b981, #059669)",
+      "linear-gradient(135deg, #f59e0b, #ef4444)",
+      "linear-gradient(135deg, #6366f1, #a855f7)",
+      "linear-gradient(135deg, #14b8a6, #0284c7)"
+    ];
+
+    function getGradientForName(str) {
+      if (!str) return GRADIENTS[0];
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+      const idx = Math.abs(hash) % GRADIENTS.length;
+      return GRADIENTS[idx];
+    }
+
+    // Scroll detection
+    const stream = document.getElementById("chatStream");
+    stream.addEventListener("scroll", () => {
+      const atBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 50;
       isUserScrolledUp = !atBottom;
     });
 
-    function switchTab(tab) {
-      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-      if (tab === "chat") {
-        document.querySelector(".tab-btn:first-child").classList.add("active");
-        document.getElementById("tab-chat").classList.add("active");
+    // Auto-expand textarea
+    const msgInput = document.getElementById("messageInput");
+    msgInput.addEventListener("input", function() {
+      this.style.height = "auto";
+      this.style.height = (this.scrollHeight) + "px";
+      if (this.value.startsWith("/")) {
+        document.getElementById("commandPopover").classList.add("open");
       } else {
-        document.querySelector(".tab-btn:last-child").classList.add("active");
-        document.getElementById("tab-downloads").classList.add("active");
+        document.getElementById("commandPopover").classList.remove("open");
       }
+    });
+
+    function handleInputKey(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSendMessage();
+      } else if (e.key === "Escape") {
+        document.getElementById("commandPopover").classList.remove("open");
+      }
+    }
+
+    function toggleSidebar(show) {
+      const sb = document.getElementById("sidebar");
+      if (show) sb.classList.remove("hidden-mobile");
+      else sb.classList.add("hidden-mobile");
     }
 
     function toggleQrModal() {
-      const modal = document.getElementById("qrModal");
-      modal.classList.toggle("open");
+      document.getElementById("qrModal").classList.toggle("open");
     }
 
-    function applyCustomHost() {
-      let val = document.getElementById("customHostInput").value.trim();
-      if (!val.startsWith("http://") && !val.startsWith("https://")) {
-        val = "http://" + val;
-      }
-      API_BASE = val.replace(/\/+$/, "");
-      document.getElementById("customHostInput").value = API_BASE;
-      addSystemMsg(`Switched Node Host API to ${API_BASE}`);
-      fetchState();
-      fetchHistory();
+    function toggleSettingsModal() {
+      document.getElementById("settingsModal").classList.toggle("open");
+    }
+
+    function toggleCommandPalette() {
+      document.getElementById("commandPopover").classList.toggle("open");
+    }
+
+    function insertCommand(cmd) {
+      msgInput.value = cmd;
+      msgInput.focus();
+      document.getElementById("commandPopover").classList.remove("open");
     }
 
     function copyText(id) {
       const el = document.getElementById(id);
-      el.select();
-      navigator.clipboard.writeText(el.value).then(() => {
+      navigator.clipboard.writeText(el.innerText || el.value).then(() => {
         alert("Copied to clipboard!");
       });
     }
 
-    function setCommand(cmd) {
-      const input = document.getElementById("chatInput");
-      input.value = cmd;
-      input.focus();
+    function applyHostApi() {
+      let val = document.getElementById("hostApiInput").value.trim().replace(/\/+$/, "");
+      if (!val.startsWith("http")) val = "http://" + val;
+      API_BASE = val;
+      toggleSettingsModal();
+      syncState();
+      syncHistory();
     }
 
-    function addSystemMsg(text) {
-      const div = document.createElement("div");
-      div.className = "msg-bubble msg-action";
-      div.innerText = `[INFO] ${text}`;
-      msgContainer.appendChild(div);
-      if (!isUserScrolledUp) msgContainer.scrollTop = msgContainer.scrollHeight;
+    async function saveNickname() {
+      const nick = document.getElementById("changeNickInput").value.trim();
+      if (!nick) return;
+      await relayCommand(`/nick ${nick}`);
+      toggleSettingsModal();
     }
 
-    // Fetch Node State & Peers
-    async function fetchState() {
+    // Poll State & Render Users
+    async function syncState() {
       try {
-        const res = await fetch(`${API_BASE}/api/chat/state`, { signal: AbortSignal.timeout(3000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await fetch(`${API_BASE}/api/chat/state`, { signal: AbortSignal.timeout(2500) });
+        if (!res.ok) throw new Error(res.statusText);
         const data = await res.json();
-        
+
         if (data.name) {
           localNick = data.name;
-          document.getElementById("nodeName").innerText = localNick;
+          document.getElementById("localNick").innerText = localNick;
+          document.getElementById("localAvatar").innerText = localNick.charAt(0).toUpperCase();
+          document.getElementById("localAvatar").style.background = getGradientForName(localNick);
+        }
+        if (data.port) {
+          document.getElementById("localPort").innerText = data.port;
         }
         if (data.primary_url) {
-          document.getElementById("nodeEndpoint").innerText = data.primary_url;
           document.getElementById("qrUrlLabel").innerText = data.primary_url;
         }
-        
-        activePeer = data.active_peer || "";
-        const targetLabel = document.getElementById("activePeerTarget");
-        if (activePeer) {
-          const pName = data.active_peer_name || "peer";
-          targetLabel.innerText = `${pName} @ ${activePeer}`;
-        } else {
-          targetLabel.innerText = "No Active Peer";
-        }
 
-        // Render Peers List
-        renderPeers(data.peers || []);
+        activePeerUrl = data.active_peer || "";
+        renderPeerList(data.peers || []);
+        updateChatHeader(data);
       } catch (err) {
-        // Try fallback to /api/chat/info
+        // Fallback info ping
         try {
-          const resInfo = await fetch(`${API_BASE}/api/chat/info`, { signal: AbortSignal.timeout(2000) });
+          const resInfo = await fetch(`${API_BASE}/api/chat/info`, { signal: AbortSignal.timeout(1500) });
           if (resInfo.ok) {
             const info = await resInfo.json();
-            if (info.name) document.getElementById("nodeName").innerText = info.name;
+            if (info.name) document.getElementById("localNick").innerText = info.name;
           }
         } catch (_) {}
       }
     }
 
-    function renderPeers(peers) {
-      const list = document.getElementById("peerList");
-      document.getElementById("peerCount").innerText = peers.length;
+    function renderPeerList(peers) {
+      peersListCache = peers;
+      const container = document.getElementById("peersList");
+      document.getElementById("peerCountLabel").innerText = peers.length;
+
       if (peers.length === 0) {
-        list.innerHTML = `<li style="color:var(--muted); font-size:0.8rem; text-align:center; padding:20px 0;">No peers discovered yet.<br>Click "Scan Subnet" or connect below.</li>`;
+        container.innerHTML = `
+          <div style="text-align:center; padding:30px 10px; color:var(--text-dim); font-size:0.8rem;">
+            No users discovered yet.<br>Click <strong>Scan</strong> or enter an IPv6 peer below.
+          </div>
+        `;
         return;
       }
 
-      list.innerHTML = "";
+      container.innerHTML = "";
       peers.forEach(p => {
-        const li = document.createElement("li");
-        li.className = `peer-card ${p.active ? 'active' : ''}`;
-        li.onclick = () => switchToPeer(p.index);
+        const item = document.createElement("div");
+        item.className = `peer-item ${p.active ? 'active' : ''}`;
+        item.onclick = () => selectPeer(p.index);
 
-        li.innerHTML = `
-          <div class="peer-header">
-            <span class="peer-name">[${p.index}] ${escapeHtml(p.name || 'peer')}</span>
-            <span class="peer-status ${p.online ? 'online' : 'offline'}">${p.online ? 'ONLINE' : 'OFFLINE'}</span>
+        const pName = p.name || `peer#${p.index}`;
+        const pInitial = pName.charAt(0).toUpperCase();
+        const pGradient = getGradientForName(pName);
+        const isV6 = p.url.includes("[") || p.url.includes("::");
+
+        item.innerHTML = `
+          <div class="avatar-wrapper">
+            <div class="avatar" style="background:${pGradient}; width:38px; height:38px; font-size:0.95rem;">${pInitial}</div>
+            <div class="status-indicator ${p.online ? '' : 'offline'}"></div>
           </div>
-          <div class="peer-url">${escapeHtml(p.url)}</div>
+          <div class="peer-item-body">
+            <div class="peer-item-top">
+              <span class="peer-item-name">${escapeHtml(pName)}</span>
+              <span class="peer-item-time">${p.version || ''}</span>
+            </div>
+            <div class="peer-item-bottom">
+              <span class="peer-item-preview">${escapeHtml(p.url)}</span>
+              <span class="peer-network-tag">${isV6 ? 'IPv6' : 'Local'}</span>
+            </div>
+          </div>
         `;
-        list.appendChild(li);
+        container.appendChild(item);
       });
     }
 
-    async function switchToPeer(idx) {
+    function filterPeerList() {
+      const q = document.getElementById("searchInput").value.toLowerCase();
+      const filtered = peersListCache.filter(p => 
+        (p.name && p.name.toLowerCase().includes(q)) || 
+        (p.url && p.url.toLowerCase().includes(q))
+      );
+      renderPeerList(filtered);
+    }
+
+    function updateChatHeader(data) {
+      const title = document.getElementById("activePeerTitle");
+      const route = document.getElementById("activePeerEndpoint");
+      const badge = document.getElementById("activePeerStatusBadge");
+      const avatar = document.getElementById("activePeerAvatar");
+
+      if (data.active_peer) {
+        const pName = data.active_peer_name || "peer";
+        title.innerText = pName;
+        route.innerText = data.active_peer;
+        avatar.innerText = pName.charAt(0).toUpperCase();
+        avatar.style.background = getGradientForName(pName);
+
+        badge.innerText = "Connected";
+        badge.style.color = "var(--status-online)";
+        badge.style.background = "var(--status-online-glow)";
+        document.getElementById("emptyChatPlaceholder").style.display = "none";
+      } else {
+        title.innerText = "Select a user";
+        route.innerText = "No active peer selected";
+        avatar.innerText = "?";
+        avatar.style.background = GRADIENTS[0];
+        badge.innerText = "Standby";
+        badge.style.color = "var(--text-dim)";
+        badge.style.background = "rgba(255,255,255,0.06)";
+      }
+    }
+
+    async function selectPeer(idx) {
+      toggleSidebar(false);
       await relayCommand(`/peer ${idx}`);
     }
 
-    async function connectToPeer() {
-      const input = document.getElementById("newPeerUrl");
-      const url = input.value.trim();
-      if (!url) return;
+    async function connectDirectPeer() {
+      const input = document.getElementById("directConnectInput");
+      const val = input.value.trim();
+      if (!val) return;
       input.value = "";
-      await relayCommand(`/peer ${url}`);
+      await relayCommand(`/peer ${val}`);
     }
 
-    // Fetch Chat History
-    async function fetchHistory() {
+    async function triggerScan() {
+      await relayCommand('/scan');
+    }
+
+    // Messages Stream & Rendering
+    async function syncHistory() {
       try {
-        const res = await fetch(`${API_BASE}/api/chat/history?limit=60`, { signal: AbortSignal.timeout(3000) });
+        const res = await fetch(`${API_BASE}/api/chat/history?limit=70`, { signal: AbortSignal.timeout(2500) });
         if (!res.ok) return;
         const messages = await res.json();
         if (!Array.isArray(messages)) return;
 
-        if (messages.length !== lastRenderedCount) {
+        if (messages.length !== messagesCache.length) {
           renderMessages(messages);
-          lastRenderedCount = messages.length;
+          messagesCache = messages;
         }
-      } catch (err) {
-        // Silently retry on next tick
-      }
+      } catch (_) {}
     }
 
     function renderMessages(messages) {
-      msgContainer.innerHTML = "";
-      if (messages.length === 0) {
-        msgContainer.innerHTML = `<div class="msg-bubble msg-action">[SYSTEM] No chat messages yet. Send a message to start!</div>`;
-        return;
+      // Remove placeholder if messages exist
+      if (messages.length > 0) {
+        document.getElementById("emptyChatPlaceholder").style.display = "none";
       }
 
+      // Preserve scroll position if scrolled up
+      stream.innerHTML = "";
+
+      let lastDate = "";
       messages.forEach(m => {
-        const bubble = document.createElement("div");
-        const isOut = (m.direction === "OUT");
+        // Date divider
+        const timeObj = m.timestamp ? new Date(m.timestamp) : new Date();
+        const dateStr = timeObj.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        if (dateStr !== lastDate) {
+          const div = document.createElement("div");
+          div.className = "day-divider";
+          div.innerText = dateStr;
+          stream.appendChild(div);
+          lastDate = dateStr;
+        }
+
+        const isSent = (m.direction === "OUT");
         const isAction = m.text && m.text.startsWith("/me ");
 
         if (isAction) {
-          bubble.className = "msg-bubble msg-action";
-          const actionText = m.text.slice(4);
-          const senderName = isOut ? localNick : (m.sender || "peer");
-          bubble.innerText = `* ${senderName} ${actionText}`;
-        } else {
-          bubble.className = `msg-bubble ${isOut ? 'msg-out' : 'msg-in'}`;
-          
-          let timeStr = "";
-          if (m.timestamp) {
-            const d = new Date(m.timestamp);
-            timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          }
-
-          bubble.innerHTML = `
-            <div class="msg-meta">
-              <span class="msg-sender">${escapeHtml(isOut ? localNick : (m.sender || 'peer'))}</span>
-              <span>${timeStr}</span>
-            </div>
-            <div class="msg-text">${escapeHtml(m.text || '')}</div>
-          `;
+          const actDiv = document.createElement("div");
+          actDiv.className = "msg-action-pill";
+          const actionBody = m.text.slice(4);
+          const actor = isSent ? localNick : (m.sender || "peer");
+          actDiv.innerText = `* ${actor} ${actionBody}`;
+          stream.appendChild(actDiv);
+          return;
         }
-        msgContainer.appendChild(bubble);
+
+        const group = document.createElement("div");
+        group.className = `msg-group ${isSent ? 'sent' : 'received'}`;
+
+        const timeFormatted = timeObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        group.innerHTML = `
+          <div class="msg-bubble">
+            ${escapeHtml(m.text || '')}
+          </div>
+          <div class="msg-info-line">
+            <span>${timeFormatted}</span>
+            ${isSent ? `
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="check-icon">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            ` : ''}
+          </div>
+        `;
+        stream.appendChild(group);
       });
 
       if (!isUserScrolledUp) {
-        msgContainer.scrollTop = msgContainer.scrollHeight;
+        stream.scrollTop = stream.scrollHeight;
       }
     }
 
-    function clearMessages() {
-      msgContainer.innerHTML = `<div class="msg-bubble msg-action">[SYSTEM] Console display cleared.</div>`;
-      lastRenderedCount = 0;
-    }
-
-    // Relay Commands or Messages
-    async function handleSend() {
-      const input = document.getElementById("chatInput");
-      const text = input.value.trim();
+    // Sending and Relaying
+    async function handleSendMessage() {
+      const text = msgInput.value.trim();
       if (!text) return;
-      input.value = "";
+
+      msgInput.value = "";
+      msgInput.style.height = "auto";
+      document.getElementById("commandPopover").classList.remove("open");
 
       if (text.startsWith("/")) {
         await relayCommand(text);
       } else {
-        await sendMessage(text);
+        try {
+          const res = await fetch(`${API_BASE}/api/relay`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text })
+          });
+          const data = await res.json();
+          if (data.status === "error") {
+            showNotice(data.message);
+          }
+          await syncHistory();
+        } catch (err) {
+          showNotice(`Send failed: ${err.message}`);
+        }
       }
     }
 
     async function relayCommand(cmd) {
-      addSystemMsg(`Relaying: ${cmd}`);
+      showNotice(`Relaying: ${cmd}`);
       try {
         const res = await fetch(`${API_BASE}/api/relay`, {
           method: "POST",
@@ -964,47 +1447,21 @@ girchat http://[2409:4055:2db3:b379::d4]:8723 -n alice
         });
         const data = await res.json();
         if (data.message) {
-          addSystemMsg(data.message);
+          showNotice(data.message);
         }
-        await fetchState();
-        await fetchHistory();
+        await syncState();
+        await syncHistory();
       } catch (err) {
-        addSystemMsg(`Relay failed: ${err.message}. Trying direct command dispatch.`);
+        showNotice(`Relay error: ${err.message}`);
       }
     }
 
-    async function sendMessage(text) {
-      try {
-        const res = await fetch(`${API_BASE}/api/relay`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: text })
-        });
-        const data = await res.json();
-        if (data.status === "error") {
-          addSystemMsg(`Send error: ${data.message}`);
-        }
-        await fetchHistory();
-      } catch (err) {
-        // Fallback: try posting directly to active peer or local node /api/chat/message
-        try {
-          const res2 = await fetch(`${API_BASE}/api/chat/message`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sender: localNick,
-              text: text,
-              reply_port: 8723
-            })
-          });
-          if (res2.ok) {
-            addSystemMsg(`Delivered via direct /api/chat/message`);
-            await fetchHistory();
-            return;
-          }
-        } catch (_) {}
-        addSystemMsg(`Message delivery failed: ${err.message}`);
-      }
+    function showNotice(text) {
+      const div = document.createElement("div");
+      div.className = "msg-system-notice";
+      div.innerText = `• ${text}`;
+      stream.appendChild(div);
+      if (!isUserScrolledUp) stream.scrollTop = stream.scrollHeight;
     }
 
     function escapeHtml(str) {
@@ -1012,15 +1469,11 @@ girchat http://[2409:4055:2db3:b379::d4]:8723 -n alice
       return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
-    // Auto-polling loop
-    fetchState();
-    fetchHistory();
-    setInterval(() => {
-      fetchHistory();
-    }, 1200);
-    setInterval(() => {
-      fetchState();
-    }, 4000);
+    // Auto-sync intervals
+    syncState();
+    syncHistory();
+    setInterval(syncHistory, 1000);
+    setInterval(syncState, 3500);
   </script>
 </body>
 </html>
